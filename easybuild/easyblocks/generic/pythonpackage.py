@@ -32,6 +32,7 @@ EasyBuild support for Python packages, implemented as an easyblock
 @author: Jens Timmerman (Ghent University)
 @author: Alexander Grund (TU Dresden)
 """
+import glob
 import json
 import os
 import re
@@ -784,22 +785,34 @@ class PythonPackage(ExtensionEasyBlock):
                 build_cmd = 'build'  # Default value for setup.py
             build_cmd = '%(python)s setup.py ' + build_cmd
 
+        out = ''
         if build_cmd:
             build_cmd = build_cmd % {'python': self.python_cmd}
             cmd = ' '.join([self.cfg['prebuildopts'], build_cmd, self.cfg['buildopts']])
+            (out, _) = run_cmd(cmd, log_all=True, simple=False)
         elif self.cfg.get('use_pip') == 'wheel':
             wheel_dir = tempfile.mkdtemp(prefix=self.name+'_wheel-')
             cmd = self.compose_install_command(
                 prefix=wheel_dir,
                 preinstallopts=self.cfg['prebuildopts'],
                 installopts=self.cfg['buildopts'])
-            cmd = cmd.replace("install --prefix=", "wheel --wheel-dir=")
-
-            if self.install_cmd == PIP_INSTALL_CMD:
-                self.install_cmd = PIP_INSTALL_CMD.replace('%(loc)s', os.path.join(wheel_dir, '*.whl'))
-        else:
-            return
-        (out, _) = run_cmd(cmd, log_all=True, simple=False)
+            orig_cmd = cmd
+            for src, repl in ((' install ', ' wheel '), (' --prefix=', ' --wheel-dir=')):
+                if src not in cmd:
+                    raise EasyBuildError("Error adjusting install command `%s` for building wheel: '%s' not found!",
+                                         orig_cmd, cmd)
+                cmd = cmd.replace(src, repl)
+            (out, _) = run_cmd(cmd, log_all=True, simple=False)
+            wheels = glob.glob(os.path.join(wheel_dir, '*.whl'))
+            if not wheels:
+                raise EasyBuildError('Build failed: No wheel files found in %s after running %s', wheel_dir, cmd)
+            self.log.info('Build created wheel file(s) ' + ', '.join(wheels))
+            # Prepare config values for real installation
+            # Source is the wheels
+            self.cfg['install_src'] = ' '.join(wheels)
+            # Those options no longer apply for installing wheels, unset them to be safe
+            for opt in ('use_pip_extras', 'use_pip_requirement'):
+                self.cfg[opt] = False
 
         # keep track of all output, so we can check for auto-downloaded dependencies;
         # take into account that build/install steps may be run multiple times
