@@ -1,5 +1,5 @@
 ##
-# Copyright 2009-2021 Ghent University
+# Copyright 2009-2024 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -38,29 +38,91 @@ import glob
 import os
 import re
 import shutil
+import stat
 from copy import copy
-from distutils.version import LooseVersion
+from easybuild.tools import LooseVersion
 
 import easybuild.tools.environment as env
+from easybuild.easyblocks.clang import DEFAULT_TARGETS_MAP as LLVM_ARCH_MAP
 from easybuild.easyblocks.generic.configuremake import ConfigureMake
 from easybuild.framework.easyconfig import CUSTOM
 from easybuild.tools.build_log import EasyBuildError
 from easybuild.tools.config import build_option
-from easybuild.tools.filetools import apply_regex_substitutions, change_dir, copy_file, move_file, symlink, write_file
+from easybuild.tools.filetools import apply_regex_substitutions, adjust_permissions, change_dir, copy_file
+from easybuild.tools.filetools import mkdir, move_file, read_file, symlink, which, write_file
 from easybuild.tools.modules import get_software_root
 from easybuild.tools.run import run_cmd
-from easybuild.tools.systemtools import check_os_dependency, get_os_name, get_os_type
-from easybuild.tools.systemtools import get_gcc_version, get_shared_lib_ext
+from easybuild.tools.systemtools import RISCV, check_os_dependency, get_cpu_architecture, get_cpu_family
+from easybuild.tools.systemtools import get_gcc_version, get_shared_lib_ext, get_os_name, get_os_type
 from easybuild.tools.toolchain.compiler import OPTARCH_GENERIC
 from easybuild.tools.utilities import nub
 
 
+# Offloading stages to build
+AMD_LLVM = 'AMD_GCN_LLVM'
+AMD_NEWLIB = 'AMD_GCN_NEWLIB'
+HOST_COMPILER = 'HOST_COMPILER'
+NVIDIA_NEWLIB = 'NVIDIA_NEWLIB'
+NVPTX_TOOLS = 'NVIDIA_NVPTX_TOOLS'
+# Additional symlinks to create for compiler commands
 COMP_CMD_SYMLINKS = {
     'cc': 'gcc',
     'c++': 'g++',
     'f77': 'gfortran',
     'f95': 'gfortran',
 }
+
+RECREATE_INCLUDE_FIXED_SCRIPT_TMPL = """#!/bin/bash
+
+# Script to (re)generate fixed headers in include-fixed subdirectory of GCC installation
+
+set -u
+
+gccInstallDir=$(dirname "$(dirname -- "$(readlink -f "${BASH_SOURCE[0]}")")")
+mkheadersPath="$gccInstallDir/%(relative_mkheaders)s"
+includesFixedDir="$gccInstallDir/%(relative_include_fixed)s"
+
+if [[ ! -f "$mkheadersPath" ]]; then
+    echo "mkheaders not found in '$(dirname "$mkheadersPath")'" >&2
+    exit 1
+fi
+
+if [[ -d "$includesFixedDir" && ! -w "$includesFixedDir" ]]; then
+    resetReadOnly=1
+    echo "Found READONLY $includesFixedDir. Adding write permissions"
+    if ! chmod -R u+w "$includesFixedDir"; then
+        echo "$includesFixedDir is readonly and failed to change that automatically." >&2
+        echo "Add write permissions manually and rerun this script." >&2
+        exit 1
+    fi
+else
+    resetReadOnly=0
+fi
+
+readmePath="$includesFixedDir/README"
+if [[ -f $readmePath ]]; then
+    tmpReadmePath=$(mktemp)
+    cp "$readmePath" "$tmpReadmePath"
+else
+    tmpReadmePath=""
+fi
+
+echo "Starting $mkheadersPath $*"
+"$mkheadersPath" "$@"
+ec=$?
+
+if [[ -n "$tmpReadmePath" && -f "$tmpReadmePath" ]]; then
+    mv -f "$tmpReadmePath" "$readmePath"
+fi
+
+if [[ $resetReadOnly -eq 1 ]] && ! chmod -R u-w "$includesFixedDir"; then
+    echo "Failed to set $includesFixedDir as readonly again after adding write permissions." >&2
+    echo "Ensure the permissions are set as required!" >&2
+    exit 1
+fi
+
+exit $ec
+"""
 
 
 class EB_GCC(ConfigureMake):
@@ -75,18 +137,25 @@ class EB_GCC(ConfigureMake):
             'clooguseisl': [False, "Use ISL with CLooG or not", CUSTOM],
             'generic': [None, "Build GCC and support libraries such that it runs on all processors of the target "
                               "architecture (use False to enforce non-generic regardless of configuration)", CUSTOM],
+            'rename_include_fixed': [False, "Rename the 'include-fixed' directory to avoid that it is used by GCC. "
+                                            "This avoids issues when upgrading the OS but might limit the "
+                                            "functionality of GCC, especially if the OS GLIBC is older than GCC. "
+                                            "A script to (re-)generate the include-fixed folder is created in the "
+                                            "'easybuild' subfolder inside the installation directory.", CUSTOM],
             'languages': [[], "List of languages to build GCC for (--enable-languages)", CUSTOM],
             'multilib': [False, "Build multilib gcc (both i386 and x86_64)", CUSTOM],
             'pplwatchdog': [False, "Enable PPL watchdog", CUSTOM],
             'prefer_lib_subdir': [False, "Configure GCC to prefer 'lib' subdirs over 'lib64' when linking", CUSTOM],
             'profiled': [False, "Bootstrap GCC with profile-guided optimizations", CUSTOM],
-            'use_gold_linker': [True, "Configure GCC to use GOLD as default linker", CUSTOM],
+            'use_gold_linker': [None, "Configure GCC to use GOLD as default linker "
+                                      "(default: enable automatically for GCC < 11.3.0, except on RISC-V)", CUSTOM],
             'withcloog': [False, "Build GCC with CLooG support", CUSTOM],
             'withisl': [False, "Build GCC with ISL support", CUSTOM],
             'withlibiberty': [False, "Enable installing of libiberty", CUSTOM],
             'withlto': [True, "Enable LTO support", CUSTOM],
             'withppl': [False, "Build GCC with PPL support", CUSTOM],
             'withnvptx': [False, "Build GCC with NVPTX offload support", CUSTOM],
+            'withamdgcn': [False, "Build GCC with AMD GCN offload support", CUSTOM],
         }
         return ConfigureMake.extra_options(extra_vars)
 
@@ -94,6 +163,15 @@ class EB_GCC(ConfigureMake):
         super(EB_GCC, self).__init__(*args, **kwargs)
 
         self.stagedbuild = False
+        # Each build iteration is related to a specific build, first build host compiler, then potentially build NVPTX
+        # offloading and/or AMD GCN offloading
+        self.build_stages = [HOST_COMPILER]
+        self.current_stage = HOST_COMPILER
+        # Directories for additional tools needed when doing offloading to Nvidia and AMD
+        self.nvptx_tools_dir = None  # nvptx-tools necessary for Nvidia
+        self.llvm_dir = None  # LLVM is necessary when offloading to AMD
+        self.lld_dir = None  # LLD is the only required component of LLVM
+        self.newlib_dir = None  # Used by both NVPTX and AMD GCN backend
 
         # need to make sure version is an actual version
         # required because of support in SystemCompiler generic easyblock to specify 'system' as version,
@@ -110,11 +188,20 @@ class EB_GCC(ConfigureMake):
             if version < LooseVersion('5.0.0') and self.cfg['withisl'] and not self.cfg['withcloog']:
                 raise EasyBuildError("Activating ISL without CLooG is pointless")
 
+            # Disable the Gold linker by default for GCC 11.3.0 and newer, as it suffers from bitrot
+            if self.cfg['use_gold_linker'] is None:
+                self.cfg['use_gold_linker'] = version < LooseVersion('11.3.0')
+
         # unset some environment variables that are known to may cause nasty build errors when bootstrapping
         self.cfg.update('unwanted_env_vars', ['CPATH', 'C_INCLUDE_PATH', 'CPLUS_INCLUDE_PATH', 'OBJC_INCLUDE_PATH'])
         # ubuntu needs the LIBRARY_PATH env var to work apparently (#363)
         if get_os_name() not in ['ubuntu', 'debian']:
             self.cfg.update('unwanted_env_vars', ['LIBRARY_PATH'])
+
+        # disable NVPTX on RISC-V
+        if get_cpu_family() == RISCV:
+            self.log.warning('Setting withnvptx to False, since we are building on a RISC-V system')
+            self.cfg['withnvptx'] = False
 
     def create_dir(self, dirname):
         """
@@ -122,8 +209,8 @@ class EB_GCC(ConfigureMake):
         """
         dirpath = os.path.join(self.cfg['start_dir'], dirname)
         try:
-            os.mkdir(dirpath)
-            os.chdir(dirpath)
+            mkdir(dirpath)
+            change_dir(dirpath)
             self.log.debug("Created dir at %s" % dirpath)
             return dirpath
         except OSError as err:
@@ -152,6 +239,9 @@ class EB_GCC(ConfigureMake):
 
         # for MPFR v4.x & newer, we need a recent GCC that supports -flto
         if LooseVersion(mpfr_ver) >= LooseVersion('4.0'):
+
+            disable_mpfr_lto = False
+
             # check GCC version being used
             # GCC 4.5 is required for -flto (cfr. https://gcc.gnu.org/gcc-4.5/changes.html)
             gcc_ver = get_gcc_version()
@@ -161,14 +251,26 @@ class EB_GCC(ConfigureMake):
             elif LooseVersion(gcc_ver) < LooseVersion(min_gcc_ver_lto):
                 self.log.info("Configuring MPFR to build without LTO in stage 1 (GCC %s is too old: < %s)!",
                               gcc_ver, min_gcc_ver_lto)
+                disable_mpfr_lto = True
+            else:
+                self.log.info("GCC %s (>= %s) is OK for building MPFR in stage 1 with LTO enabled",
+                              gcc_ver, min_gcc_ver_lto)
 
+                # check whether GCC actually supports LTO (it may be configured with --disable-lto),
+                # by compiling a simple C program using -flto
+                out, ec = run_cmd("echo 'void main() {}' | gcc -x c -flto - -o /dev/null", simple=False, log_ok=False)
+                gcc_path = which('gcc')
+                if ec:
+                    self.log.info("GCC command %s doesn't seem to support LTO, test compile failed: %s", gcc_path, out)
+                    disable_mpfr_lto = True
+                else:
+                    self.log.info("GCC command %s provides LTO support, so using it when building MPFR", gcc_path)
+
+            if disable_mpfr_lto:
                 # patch GCC's Makefile to inject --disable-lto when building MPFR
                 stage1_makefile = os.path.join(objdir, 'Makefile')
                 regex_subs = [(r'(--with-gmp-lib=\$\$r/\$\(HOST_SUBDIR\)/gmp/.libs) \\', r'\1 --disable-lto \\')]
                 apply_regex_substitutions(stage1_makefile, regex_subs)
-            else:
-                self.log.info("GCC %s (>= %s) is OK for building MPFR in stage 1 with LTO enabled",
-                              gcc_ver, min_gcc_ver_lto)
 
     def prep_extra_src_dirs(self, stage, target_prefix=None):
         """
@@ -289,6 +391,15 @@ class EB_GCC(ConfigureMake):
         if unknown_options:
             raise EasyBuildError("Unrecognized options found during configure: %s", unknown_options)
 
+    def prepare_step(self, *args, **kwargs):
+        """
+        Prepare build environment, track currently active build stage
+        """
+        super(EB_GCC, self).prepare_step(*args, **kwargs)
+
+        # Set the current build stage to the specified stage based on the iteration index
+        self.current_stage = self.build_stages[self.iter_idx]
+
     def configure_step(self):
         """
         Configure for GCC build:
@@ -309,8 +420,19 @@ class EB_GCC(ConfigureMake):
             # (see https://gcc.gnu.org/install/configure.html)
             self.cfg.update('configopts', '--with-sysroot=%s' % sysroot)
 
-            # avoid that --sysroot is passed to linker by patching value for SYSROOT_SPEC in gcc/gcc.c
-            apply_regex_substitutions(os.path.join('gcc', 'gcc.c'), [('--sysroot=%R', '')])
+            libc_so_candidates = [os.path.join(sysroot, x, 'libc.so') for x in
+                                  ['lib', 'lib64', os.path.join('usr', 'lib'), os.path.join('usr', 'lib64')]]
+            for libc_so in libc_so_candidates:
+                if os.path.exists(libc_so):
+                    # only patch gcc.c or gcc.cc if entries in libc.so are prefixed with sysroot
+                    if '\nGROUP ( ' + sysroot in read_file(libc_so):
+                        gccfile = os.path.join('gcc', 'gcc.c')
+                        # renamed to gcc.cc in GCC 12
+                        if not os.path.exists(gccfile):
+                            gccfile = os.path.join('gcc', 'gcc.cc')
+                        # avoid that --sysroot is passed to linker by patching value for SYSROOT_SPEC in gcc/gcc.c*
+                        apply_regex_substitutions(gccfile, [('--sysroot=%R', '')])
+                    break
 
             # prefix dynamic linkers with sysroot
             # this patches lines like:
@@ -338,10 +460,37 @@ class EB_GCC(ConfigureMake):
         if self.cfg['languages']:
             self.configopts += " --enable-languages=%s" % ','.join(self.cfg['languages'])
 
-        if self.cfg['withnvptx']:
-            if self.iter_idx == 0:
+        if self.cfg['withnvptx'] or self.cfg['withamdgcn']:
+
+            # Check that sources for optional dependencies for NVPTX and/or AMD GCN offload support are available
+            source_deps = [
+                (['withnvptx'], 'nvptx-tools', 'nvptx_tools_dir'),
+                (['withamdgcn'], 'LLD', 'lld_dir'),
+                (['withamdgcn'], 'LLVM', 'llvm_dir'),
+                (['withamdgcn', 'withnvptx'], 'newlib', 'newlib_dir'),
+            ]
+
+            for (with_opts, dep_name, target_var_name) in source_deps:
+                if any(self.cfg[x] for x in with_opts):
+                    hits = glob.glob(os.path.join(self.builddir, dep_name.lower() + '-*'))
+                    if len(hits) == 1:
+                        setattr(self, target_var_name, hits[0])
+                        self.log.info("Found sources for %s at %s (%s)", dep_name, hits[0], target_var_name)
+                    else:
+                        with_opts_or = ' or '.join("'%s'" % x for x in with_opts)
+                        error_msg = "Easyconfig enables %s, " % with_opts_or
+                        error_msg += "but '%s' sources were not found. " % dep_name
+                        error_msg += "Make sure that sources for %s are listed in the easyconfig file!" % dep_name
+                        raise EasyBuildError(error_msg)
+
+            if self.current_stage == HOST_COMPILER:
                 self.configopts += " --without-cuda-driver"
-                self.configopts += " --enable-offload-targets=nvptx-none"
+                offload_target = []
+                if self.cfg['withnvptx']:
+                    offload_target += ['nvptx-none']
+                if self.cfg['withamdgcn']:
+                    offload_target += ['amdgcn-amdhsa']
+                self.configopts += " --enable-offload-targets=%s" % ','.join(offload_target)
             else:
                 # register installed GCC as compiler to use nvptx
                 path = "%s/bin:%s" % (self.installdir, os.getenv('PATH'))
@@ -352,26 +501,69 @@ class EB_GCC(ConfigureMake):
                     'val': os.getenv('LD_LIBRARY_PATH')
                 }
                 env.setvar('LD_LIBRARY_PATH', ld_lib_path)
-                extra_source = {1: "nvptx-tools", 2: "newlib"}[self.iter_idx]
-                extra_source_dirs = glob.glob(os.path.join(self.builddir, '%s-*' % extra_source))
-                if len(extra_source_dirs) != 1:
-                    raise EasyBuildError("Failed to isolate %s source dir" % extra_source)
-                if self.iter_idx == 1:
-                    # compile nvptx-tools
-                    change_dir(extra_source_dirs[0])
-                else:  # self.iter_idx == 2
-                    # compile nvptx target compiler
-                    symlink(os.path.join(extra_source_dirs[0], 'newlib'), 'newlib')
-                    self.create_dir("build-nvptx-gcc")
+
+                if self.current_stage == NVPTX_TOOLS:
+                    # Configure NVPTX tools and build
+                    change_dir(self.nvptx_tools_dir)
+                    return super(EB_GCC, self).configure_step()
+
+                elif self.current_stage == AMD_LLVM:
+                    # determine LLVM target to use for host CPU
+                    cpu_arch = get_cpu_architecture()
+                    try:
+                        llvm_target_cpu = LLVM_ARCH_MAP[cpu_arch][0]
+                    except KeyError:
+                        raise EasyBuildError("Failed to determine LLVM target for host CPU (%s)" % cpu_arch)
+
+                    # Setup symlink from LLD source to 'builddir/lld' so that LLVM can find it
+                    symlink(self.lld_dir, '%s/lld' % self.builddir)
+                    # Build LLD tools from LLVM needed for AMD offloading
+                    # Build LLVM in separate directory
+                    self.create_dir('build_llvm_amdgcn')
+                    cmd = ' '.join([
+                        'cmake',
+                        "-DLLVM_TARGETS_TO_BUILD='%s;AMDGPU'" % llvm_target_cpu,
+                        "-DLLVM_ENABLE_PROJECTS=lld",
+                        "-DCMAKE_BUILD_TYPE=Release",
+                        self.llvm_dir,
+                    ])
+                    run_cmd(cmd, log_all=True, simple=True)
+                    # Need to terminate the current configuration step, but we can't run 'configure' since LLVM uses
+                    # CMake, we therefore run 'CMake' manually and then return nothing.
+                    # The normal make stage will build LLVM for us as expected, note that we override the install step
+                    # further down in this file to avoid installing LLVM
+                    return
+
+                elif self.current_stage in (AMD_NEWLIB, NVIDIA_NEWLIB):
+
+                    symlink(os.path.join(self.newlib_dir, 'newlib'), 'newlib')
                     self.cfg.update('configopts', self.configopts)
-                    self.cfg.update('configopts', "--with-build-time-tools=%s/nvptx-none/bin" % self.installdir)
-                    self.cfg.update('configopts', "--target=nvptx-none")
+
+                    if self.current_stage == NVIDIA_NEWLIB:
+                        # compile nvptx target compiler
+                        self.create_dir("build-nvptx-gcc")
+                        target = 'nvptx-none'
+                        self.cfg.update('configopts', "--enable-newlib-io-long-long")
+                    else:
+                        # compile AMD GCN target compiler
+                        self.create_dir("build-amdgcn-gcc")
+                        target = 'amdgcn-amdhsa'
+                        self.cfg.update('configopts', "--with-newlib")
+                        self.cfg.update('configopts', "--disable-libquadmath")
+
+                    build_tools_dir = os.path.join(self.installdir, target, 'bin')
+                    self.cfg.update('configopts', '--with-build-time-tools=' + build_tools_dir)
+                    self.cfg.update('configopts', '--target=' + target)
                     host_type = self.determine_build_and_host_type()[1]
                     self.cfg.update('configopts', "--enable-as-accelerator-for=%s" % host_type)
                     self.cfg.update('configopts', "--disable-sjlj-exceptions")
-                    self.cfg.update('configopts', "--enable-newlib-io-long-long")
+
                     self.cfg['configure_cmd_prefix'] = '../'
-                return super(EB_GCC, self).configure_step()
+                    return super(EB_GCC, self).configure_step()
+
+                else:
+                    raise EasyBuildError("Unknown offload configure step: %s, available: %s"
+                                         % (self.current_stage, self.build_stages))
 
         # enable building of libiberty, if desired
         if self.cfg['withlibiberty']:
@@ -408,8 +600,10 @@ class EB_GCC(ConfigureMake):
         # enable plugin support
         self.configopts += " --enable-plugins "
 
-        # use GOLD as default linker
-        if self.cfg['use_gold_linker']:
+        # use GOLD as default linker, except on RISC-V (since it's not supported there)
+        if get_cpu_family() == RISCV:
+            self.configopts += " --disable-gold --enable-ld=default"
+        elif self.cfg['use_gold_linker']:
             self.configopts += " --enable-gold=default --enable-ld --with-plugin-ld=ld.gold"
         else:
             self.configopts += " --enable-gold --enable-ld=default"
@@ -460,6 +654,7 @@ class EB_GCC(ConfigureMake):
         self.disable_lto_mpfr_old_gcc(objdir)
 
     def build_step(self):
+        """Custom (staged) build step for GCC."""
 
         if self.iter_idx > 0:
             # call standard build_step for nvptx-tools and nvptx GCC
@@ -487,6 +682,10 @@ class EB_GCC(ConfigureMake):
                 'val': os.getenv('LD_LIBRARY_PATH')
             }
             env.setvar('LD_LIBRARY_PATH', ld_lib_path)
+            if get_cpu_family() == RISCV:
+                # on RISC-V the compilers built in stage 1 fail to find some libraries from the lib dir,
+                # so let's also set $LIBRARY_PATH to work around it
+                env.setvar('LIBRARY_PATH', ld_lib_path)
 
             #
             # STAGE 2: build GMP/PPL/CLooG for stage 3
@@ -599,6 +798,14 @@ class EB_GCC(ConfigureMake):
                     if lib == "gmp":
                         # make sure correct GMP is found
                         libpath = os.path.join(stage2prefix, 'lib')
+
+                        # fall back to lib64 directory if lib was not found,
+                        # give up if neither are there
+                        if not os.path.exists(libpath):
+                            libpath += '64'
+                        if not os.path.exists(libpath):
+                            raise EasyBuildError("lib(64) subdirectory not found in %s!" % stage2prefix)
+
                         incpath = os.path.join(stage2prefix, 'include')
 
                         cppflags = os.getenv('CPPFLAGS', '')
@@ -664,7 +871,31 @@ class EB_GCC(ConfigureMake):
         # call standard build_step
         super(EB_GCC, self).build_step()
 
-    # make install is just standard install_step, nothing special there
+    def install_step(self, *args, **kwargs):
+        """Custom install step: avoid installing LLVM when building with AMD GCN offloading support"""
+        # When building AMD offloading do not install the LLVM source files with 'make install', instead move a few
+        # binaries that GCC expects when building 'newlib' so that it can reuse the LLVM GCN support
+        # https://gcc.gnu.org/wiki/Offloading#For_AMD_GCN:
+        if self.current_stage == AMD_LLVM:
+            llvm_binaries = [
+                ('ar', 'llvm-ar'),
+                ('as', 'llvm-mc'),
+                ('ld', 'lld'),
+                ('nm', 'llvm-nm'),
+                ('ranlib', 'llvm-ar'),
+            ]
+            hits = glob.glob(os.path.join(self.builddir, 'gcc-*'))
+            if len(hits) == 1:
+                gcc_build_dir = hits[0]
+                for gcc_tool, llvm_tool in llvm_binaries:
+                    from_path = os.path.join(gcc_build_dir, 'build_llvm_amdgcn', 'bin', llvm_tool)
+                    to_path = os.path.join(self.installdir, 'amdgcn-amdhsa', 'bin', gcc_tool)
+                    copy_file(from_path, to_path)
+            else:
+                raise EasyBuildError("Failed to isolate GCC build directory in %s", self.builddir)
+
+        else:
+            super(EB_GCC, self).install_step(*args, **kwargs)
 
     def post_install_step(self, *args, **kwargs):
         """
@@ -685,9 +916,9 @@ class EB_GCC(ConfigureMake):
             else:
                 raise EasyBuildError("Can't link '%s' to non-existing location %s", target, os.path.join(bindir, src))
 
-        # Rename include-fixed directory which includes system header files that were processed by fixincludes,
-        # since these may cause problems when upgrading to newer OS version.
-        # (see https://github.com/easybuilders/easybuild-easyconfigs/issues/10666)
+        # The include-fixed directory includes system header files that were processed by fixincludes.
+        # These may cause problems when upgrading to newer OS version,
+        # see https://github.com/easybuilders/easybuild-easyconfigs/issues/10666
         glob_pattern = os.path.join(self.installdir, 'lib*', 'gcc', '*-linux-gnu', self.version, 'include-fixed')
         paths = glob.glob(glob_pattern)
         if paths:
@@ -698,26 +929,26 @@ class EB_GCC(ConfigureMake):
                 if not any(os.path.samefile(path, x) for x in include_fixed_paths):
                     include_fixed_paths.append(path)
 
-            if len(include_fixed_paths) == 1:
-                include_fixed_path = include_fixed_paths[0]
+            if len(include_fixed_paths) != 1:
+                raise EasyBuildError("Exactly one 'include-fixed' directory expected, found %d: %s",
+                                     len(include_fixed_paths), include_fixed_paths)
+            include_fixed_path = include_fixed_paths[0]
 
-                msg = "Found include-fixed subdirectory at %s, "
-                msg += "renaming it to avoid using system header files patched by fixincludes..."
-                self.log.info(msg, include_fixed_path)
-
-                # limits.h and syslimits.h need to be copied to include/ first,
-                # these are strictly required (by /usr/include/limits.h for example)
-                include_path = os.path.join(os.path.dirname(include_fixed_path), 'include')
+            if self.cfg['rename_include_fixed']:
+                self.log.info("Found include-fixed subdirectory at %s", include_fixed_path)
+                include_fixed_renamed = include_fixed_path + '.renamed-by-easybuild'
+                move_file(include_fixed_path, include_fixed_renamed)
+                self.log.info("%s renamed to %s to avoid using the header files in it",
+                              include_fixed_path, include_fixed_renamed)
+                # We need to retain some files, e.g. syslimits.h is required by /usr/include/limits.h
+                mkdir(include_fixed_path)
                 retained_header_files = ['limits.h', 'syslimits.h']
                 for fn in retained_header_files:
-                    from_path = os.path.join(include_fixed_path, fn)
-                    to_path = os.path.join(include_path, fn)
+                    from_path = os.path.join(include_fixed_renamed, fn)
+                    to_path = os.path.join(include_fixed_path, fn)
                     if os.path.exists(from_path):
-                        if os.path.exists(to_path):
-                            raise EasyBuildError("%s already exists, not overwriting it with %s!", to_path, from_path)
-                        else:
-                            copy_file(from_path, to_path)
-                            self.log.info("%s copied to %s before renaming %s", from_path, to_path, include_fixed_path)
+                        copy_file(from_path, to_path)
+                        self.log.info("%s copied to %s after renaming %s", from_path, to_path, include_fixed_path)
                     else:
                         self.log.warning("Can't copy non-existing file %s to %s, since it doesn't exist!",
                                          from_path, to_path)
@@ -727,33 +958,58 @@ class EB_GCC(ConfigureMake):
                     "This directory was renamed by EasyBuild to avoid that the header files in it are picked up,",
                     "since they may cause problems when the OS is upgraded to a new (minor) version.",
                     '',
-                    "These files were copied to %s first: %s" % (include_path, ', '.join(retained_header_files)),
+                    "These files were copied to %s first: %s" % (include_fixed_path, ', '.join(retained_header_files)),
                     '',
                     "See https://github.com/easybuilders/easybuild-easyconfigs/issues/10666 for more information.",
                     '',
                 ])
                 write_file(readme, readme_txt)
 
-                include_fixed_renamed = include_fixed_path + '.renamed-by-easybuild'
-                move_file(include_fixed_path, include_fixed_renamed)
-                self.log.info("%s renamed to %s to avoid using the header files in it",
-                              include_fixed_path, include_fixed_renamed)
-            else:
-                raise EasyBuildError("Exactly one 'include-fixed' directory expected, found %d: %s",
-                                     len(include_fixed_paths), include_fixed_paths)
+            # If the mkheaders utility exists we create a wrapper script to (re)generate the fixed headers manually,
+            # e.g. after OS upgrades.
+            # Get the '*-linux-gnu' part
+            target_machine = os.path.basename(os.path.dirname(os.path.dirname(include_fixed_path)))
+            mkheaders_path = os.path.join(self.installdir, 'libexec', 'gcc', target_machine, self.version,
+                                          'install-tools', 'mkheaders')
+            if os.path.isfile(mkheaders_path):
+                recreate_include_fixed_script = os.path.join(self.installdir, 'easybuild', 'recreate_includes.sh')
+                self.log.info("Creating script to regenerate %s on OS upgrades at %s",
+                              include_fixed_path, recreate_include_fixed_script)
+                relative_mkheaders = os.path.relpath(mkheaders_path, self.installdir)
+                relative_include_fixed = os.path.relpath(include_fixed_path, self.installdir)
+                write_file(recreate_include_fixed_script, RECREATE_INCLUDE_FIXED_SCRIPT_TMPL % {
+                    "relative_mkheaders": relative_mkheaders,
+                    "relative_include_fixed": relative_include_fixed
+                })
+                adjust_permissions(recreate_include_fixed_script, stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH, add=True)
         else:
             self.log.info("No include-fixed subdirectory found at %s", glob_pattern)
 
     def run_all_steps(self, *args, **kwargs):
         """
-        If withnvptx is set, use iterated build:
+        If 'withnvptx' or 'withamdgcn' is set, use iterated build:
         iteration 0 builds the regular host compiler
         iteration 1 builds nvptx-tools
         iteration 2 builds the nvptx target compiler
+        iteration 3 builds LLD for AMD GCN offloading
+        iteration 4 builds the AMD GCN target compiler using LLD from above
         """
+        self.cfg['configopts'] = ['']
+        self.cfg['buildopts'] = ['']
         if self.cfg['withnvptx']:
-            self.cfg['configopts'] = [self.cfg['configopts']] * 3
-            self.cfg['buildopts'] = [self.cfg['buildopts']] * 3
+            # Add two additional configure and build stages when enabling NVPTX
+            # this is required to first build NVPTX tools and then newlib
+            self.cfg['configopts'] += ['', '']
+            self.cfg['buildopts'] += ['', '']
+            self.build_stages.append(NVPTX_TOOLS)
+            self.build_stages.append(NVIDIA_NEWLIB)
+        if self.cfg['withamdgcn']:
+            # Add two additional stages when enabling AMD GCN
+            # this is required to first build LLVM tools and then newlib
+            self.cfg['configopts'] += ['', '']
+            self.cfg['buildopts'] += ['', '']
+            self.build_stages.append(AMD_LLVM)
+            self.build_stages.append(AMD_NEWLIB)
         return super(EB_GCC, self).run_all_steps(*args, **kwargs)
 
     def sanity_check_step(self):
@@ -825,6 +1081,9 @@ class EB_GCC(ConfigureMake):
             bin_files.extend(['nvptx-none-as', 'nvptx-none-ld'])
             lib_files.append('libgomp-plugin-nvptx.%s' % sharedlib_ext)
 
+        if self.cfg['withamdgcn']:
+            lib_files.append('libgomp-plugin-gcn.%s' % sharedlib_ext)
+
         bin_files = ["bin/%s" % x for x in bin_files]
         libdirs64 = ['lib64']
         libdirs32 = ['lib', 'lib32']
@@ -875,7 +1134,7 @@ class EB_GCC(ConfigureMake):
         guesses.update({
             'PATH': ['bin'],
             'CPATH': [],
-            'LIBRARY_PATH': [],
+            'LIBRARY_PATH': ['lib', 'lib64'] if get_cpu_family() == RISCV else [],
             'LD_LIBRARY_PATH': ['lib', 'lib64'],
             'MANPATH': ['man', 'share/man']
         })

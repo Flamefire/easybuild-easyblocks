@@ -1,5 +1,5 @@
 # #
-# Copyright 2009-2021 Ghent University
+# Copyright 2009-2024 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -34,14 +34,15 @@ EasyBuild support for installing the Intel MPI library, implemented as an easybl
 @author: Alex Domingo (Vrije Universiteit Brussel)
 """
 import os
-from distutils.version import LooseVersion
+from easybuild.tools import LooseVersion
 
 import easybuild.tools.toolchain as toolchain
 from easybuild.easyblocks.generic.intelbase import IntelBase, ACTIVATION_NAME_2012, LICENSE_FILE_NAME_2012
 from easybuild.framework.easyconfig import CUSTOM
 from easybuild.tools.build_log import EasyBuildError
+from easybuild.tools.config import build_option
 from easybuild.tools.filetools import apply_regex_substitutions, change_dir, extract_file, mkdir, write_file
-from easybuild.tools.modules import get_software_root
+from easybuild.tools.modules import get_software_root, get_software_version
 from easybuild.tools.run import run_cmd
 from easybuild.tools.systemtools import get_shared_lib_ext
 from easybuild.tools.toolchain.mpi import get_mpi_cmd_template
@@ -207,7 +208,7 @@ EULA=accept
             mpi_mods.extend(['mpi_base.mod', 'mpi_constants.mod', 'mpi_sizeofs.mod'])
 
         if impi_ver >= LooseVersion('2021'):
-            mpi_subdir = os.path.join('mpi', 'latest')
+            mpi_subdir = self.get_versioned_subdir('mpi')
             bin_dir = os.path.join(mpi_subdir, 'bin')
             include_dir = os.path.join(mpi_subdir, 'include')
             lib_dir = os.path.join(mpi_subdir, 'lib', 'release')
@@ -222,11 +223,15 @@ EULA=accept
             lib_dir = 'lib%s' % suff
             mpi_mods.extend(['i_malloc.h'])
 
+        mpi_mods_dir = include_dir
+        if impi_ver >= LooseVersion('2021.11'):
+            mpi_mods_dir = os.path.join(mpi_mods_dir, 'mpi')
+
         shlib_ext = get_shared_lib_ext()
         custom_paths = {
             'files': [os.path.join(bin_dir, 'mpi%s' % x) for x in ['icc', 'icpc', 'ifort']] +
             [os.path.join(include_dir, 'mpi%s.h' % x) for x in ['cxx', 'f', '', 'o', 'of']] +
-            [os.path.join(include_dir, x) for x in mpi_mods] +
+            [os.path.join(mpi_mods_dir, x) for x in mpi_mods] +
             [os.path.join(lib_dir, 'libmpi.%s' % shlib_ext)] +
             [os.path.join(lib_dir, 'libmpi.a')],
             'dirs': [],
@@ -234,32 +239,31 @@ EULA=accept
 
         custom_commands = []
 
-        if impi_ver >= LooseVersion('2017'):
-            # Add minimal test program to sanity checks
-            if impi_ver >= LooseVersion('2021'):
-                impi_testsrc = os.path.join(self.installdir, 'mpi', 'latest', 'test', 'test.c')
-            else:
-                impi_testsrc = os.path.join(self.installdir, 'test', 'test.c')
+        if build_option('mpi_tests'):
+            if impi_ver >= LooseVersion('2017'):
+                # Add minimal test program to sanity checks
+                if impi_ver >= LooseVersion('2021'):
+                    impi_testsrc = os.path.join(self.installdir, self.get_versioned_subdir('mpi'))
+                    if impi_ver >= LooseVersion('2021.11'):
+                        impi_testsrc = os.path.join(impi_testsrc, 'opt', 'mpi')
+                    impi_testsrc = os.path.join(impi_testsrc, 'test', 'test.c')
+                else:
+                    impi_testsrc = os.path.join(self.installdir, 'test', 'test.c')
 
-            impi_testexe = os.path.join(self.builddir, 'mpi_test')
-            self.log.info("Adding minimal MPI test program to sanity checks: %s", impi_testsrc)
+                impi_testexe = os.path.join(self.builddir, 'mpi_test')
+                self.log.info("Adding minimal MPI test program to sanity checks: %s", impi_testsrc)
 
-            # Build test program with appropriate compiler from current toolchain
-            comp_fam = self.toolchain.comp_family()
-            if comp_fam == toolchain.INTELCOMP:
-                build_comp = 'mpiicc'
-            else:
-                build_comp = 'mpicc'
-            build_cmd = "%s %s -o %s" % (build_comp, impi_testsrc, impi_testexe)
+                # Build test program with appropriate compiler from current toolchain
+                build_cmd = "mpicc -cc=%s %s -o %s" % (os.getenv('CC'), impi_testsrc, impi_testexe)
 
-            # Execute test program with appropriate MPI executable for target toolchain
-            params = {'nr_ranks': self.cfg['parallel'], 'cmd': impi_testexe}
-            mpi_cmd_tmpl, params = get_mpi_cmd_template(toolchain.INTELMPI, params, mpi_version=self.version)
+                # Execute test program with appropriate MPI executable for target toolchain
+                params = {'nr_ranks': self.cfg['parallel'], 'cmd': impi_testexe}
+                mpi_cmd_tmpl, params = get_mpi_cmd_template(toolchain.INTELMPI, params, mpi_version=self.version)
 
-            custom_commands.extend([
-                build_cmd,  # build test program
-                mpi_cmd_tmpl % params,  # run test program
-            ])
+                custom_commands.extend([
+                    build_cmd,  # build test program
+                    mpi_cmd_tmpl % params,  # run test program
+                ])
 
         super(EB_impi, self).sanity_check_step(custom_paths=custom_paths, custom_commands=custom_commands)
 
@@ -281,7 +285,7 @@ EULA=accept
 
             impi_ver = LooseVersion(self.version)
             if impi_ver >= LooseVersion('2021'):
-                mpi_subdir = os.path.join('mpi', 'latest')
+                mpi_subdir = self.get_versioned_subdir('mpi')
                 lib_dirs = [
                     os.path.join(mpi_subdir, 'lib'),
                     os.path.join(mpi_subdir, 'lib', 'release'),
@@ -292,10 +296,13 @@ EULA=accept
                     os.path.join(mpi_subdir, 'bin'),
                     os.path.join(mpi_subdir, 'libfabric', 'bin'),
                 ]
-                manpath = os.path.join(mpi_subdir, 'man')
+                if impi_ver >= LooseVersion('2021.11'):
+                    manpath = os.path.join(mpi_subdir, 'share', 'man')
+                else:
+                    manpath = os.path.join(mpi_subdir, 'man')
 
                 if self.cfg['ofi_internal']:
-                    libfabric_dir = os.path.join('mpi', '2021.1.1', 'libfabric')
+                    libfabric_dir = os.path.join(mpi_subdir, 'libfabric')
                     lib_dirs.append(os.path.join(libfabric_dir, 'lib'))
                     path_dirs.append(os.path.join(libfabric_dir, 'bin'))
                     guesses['FI_PROVIDER_PATH'] = [os.path.join(libfabric_dir, 'lib', 'prov')]
@@ -328,8 +335,14 @@ EULA=accept
 
     def make_module_extra(self, *args, **kwargs):
         """Overwritten from Application to add extra txt"""
+
+        if LooseVersion(self.version) >= LooseVersion('2021'):
+            mpiroot = os.path.join(self.installdir, self.get_versioned_subdir('mpi'))
+        else:
+            mpiroot = self.installdir
+
         txt = super(EB_impi, self).make_module_extra(*args, **kwargs)
-        txt += self.module_generator.set_environment('I_MPI_ROOT', self.installdir)
+        txt += self.module_generator.set_environment('I_MPI_ROOT', mpiroot)
         if self.cfg['set_mpi_wrappers_compiler'] or self.cfg['set_mpi_wrappers_all']:
             for var in ['CC', 'CXX', 'F77', 'F90', 'FC']:
                 if var == 'FC':
@@ -353,10 +366,20 @@ EULA=accept
 
         if self.cfg['set_mpi_wrapper_aliases_intel'] or self.cfg['set_mpi_wrappers_all']:
             # do the same for mpiicc/mpiipc/mpiifort to be consistent, even if they may not exist
-            txt += self.module_generator.set_alias('mpiicc', 'mpiicc -cc=icc')
-            txt += self.module_generator.set_alias('mpiicpc', 'mpiicpc -cxx=icpc')
+            if (get_software_root('intel-compilers') and
+                    LooseVersion(get_software_version('intel-compilers')) >= LooseVersion('2024')):
+                txt += self.module_generator.set_alias('mpiicc', 'mpiicc -cc=icx')
+                txt += self.module_generator.set_alias('mpiicpc', 'mpiicpc -cxx=icpx')
+            else:
+                txt += self.module_generator.set_alias('mpiicc', 'mpiicc -cc=icc')
+                txt += self.module_generator.set_alias('mpiicpc', 'mpiicpc -cxx=icpc')
             # -fc also works, but -f90 takes precedence
             txt += self.module_generator.set_alias('mpiifort', 'mpiifort -f90=ifort')
+
+            if LooseVersion(self.version) >= LooseVersion('2021.11'):
+                txt += self.module_generator.set_alias('mpiicx', 'mpiicx -cc=icx')
+                txt += self.module_generator.set_alias('mpiicpx', 'mpiicpx -cxx=icpx')
+                txt += self.module_generator.set_alias('mpiifx', 'mpiifx -f90=ifx')
 
         # set environment variable UCX_TLS to 'all', this works in all hardware configurations
         # needed with UCX regardless of the transports available (even without a Mellanox HCA)

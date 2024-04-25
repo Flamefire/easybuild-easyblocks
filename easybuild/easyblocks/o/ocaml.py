@@ -1,5 +1,5 @@
 ##
-# Copyright 2015-2021 Ghent University
+# Copyright 2015-2024 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -29,7 +29,7 @@ EasyBuild support for building and installing OCaml + opam (+ extensions), imple
 """
 import os
 import re
-from distutils.version import LooseVersion
+from easybuild.tools import LooseVersion
 
 from easybuild.easyblocks.generic.configuremake import ConfigureMake
 from easybuild.tools.build_log import EasyBuildError
@@ -86,7 +86,8 @@ class EB_OCaml(ConfigureMake):
     def configure_step(self):
         """Custom configuration procedure for OCaml."""
         self.cfg['prefix_opt'] = '-prefix '
-        self.cfg.update('configopts', '-cc "%s %s"' % (os.environ['CC'], os.environ['CFLAGS']))
+        if LooseVersion(self.version) < LooseVersion("4.12"):
+            self.cfg.update('configopts', '-cc "%s %s"' % (os.environ['CC'], os.environ['CFLAGS']))
 
         if 'world.opt' not in self.cfg['buildopts']:
             self.cfg.update('buildopts', 'world.opt')
@@ -133,7 +134,7 @@ class EB_OCaml(ConfigureMake):
         self.cfg['exts_filter'] = EXTS_FILTER_OCAML_PACKAGES
         super(EB_OCaml, self).prepare_for_extensions()
 
-    def fetch_extension_sources(self, *args, **kwargs):
+    def collect_exts_file_info(self, *args, **kwargs):
         """Don't fetch extension sources, OPAM takes care of that (and archiving too)."""
         return [{'name': ext_name, 'version': ext_version} for ext_name, ext_version in self.cfg['exts_list']]
 

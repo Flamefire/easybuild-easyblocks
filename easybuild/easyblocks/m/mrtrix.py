@@ -1,5 +1,5 @@
 ##
-# Copyright 2009-2021 Ghent University
+# Copyright 2009-2024 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -27,7 +27,7 @@ EasyBuild support for building and installing MRtrix, implemented as an easybloc
 """
 import glob
 import os
-from distutils.version import LooseVersion
+from easybuild.tools import LooseVersion
 
 import easybuild.tools.environment as env
 from easybuild.framework.easyblock import EasyBlock
@@ -64,10 +64,14 @@ class EB_MRtrix(EasyBlock):
 
             env.setvar('QMAKE_CXX', os.getenv('CXX'))
             cmd = "python configure -verbose"
+
             run_cmd(cmd, log_all=True, simple=True, log_ok=True)
 
     def build_step(self):
         """Custom build procedure for MRtrix."""
+        parallel = self.cfg['parallel']
+        env.setvar('NUMBER_OF_PROCESSORS', str(parallel))
+
         cmd = "python build -verbose"
         run_cmd(cmd, log_all=True, simple=True, log_ok=True)
 

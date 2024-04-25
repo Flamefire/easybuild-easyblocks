@@ -1,7 +1,7 @@
 ##
 # This file is an EasyBuild reciPY as per https://github.com/easybuilders/easybuild
 #
-# Copyright:: Copyright 2012-2019 Uni.Lu/LCSB, NTUA
+# Copyright:: Copyright 2012-2024 Uni.Lu/LCSB, NTUA
 # Authors::   Cedric Laczny <cedric.laczny@uni.lu>, Fotis Georgatos <fotis@cern.ch>, Kenneth Hoste
 # License::   MIT/GPL
 # $Id$
@@ -19,7 +19,7 @@ EasyBuild support for building and installing Eigen, implemented as an easyblock
 
 import os
 import shutil
-from distutils.version import LooseVersion
+from easybuild.tools import LooseVersion
 
 from easybuild.easyblocks.generic.cmakemake import CMakeMake
 from easybuild.tools.filetools import copy_dir, copy_file, mkdir, apply_regex_substitutions
@@ -40,8 +40,7 @@ class EB_Eigen(CMakeMake):
             # Note: Path must be relative to the install prefix!
             self.cfg.update('configopts', "-DINCLUDE_INSTALL_DIR=%s" % 'include')
             # Patch to make the relative path actually work.
-            regex_subs = [('CACHE PATH "The directory relative to CMAKE_PREFIX_PATH',
-                           'CACHE STRING "The directory relative to CMAKE_PREFIX_PATH')]
+            regex_subs = [('CACHE PATH ("The directory relative to CMAKE.*PREFIX)', r'CACHE STRING \1')]
             apply_regex_substitutions(os.path.join(self.cfg['start_dir'], 'CMakeLists.txt'), regex_subs)
             CMakeMake.configure_step(self)
 

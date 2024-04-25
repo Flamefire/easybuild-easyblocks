@@ -1,5 +1,5 @@
 ##
-# Copyright 2012-2021 Ghent University
+# Copyright 2012-2024 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -30,7 +30,7 @@ EasyBuild support for building and installing R, implemented as an easyblock
 """
 import os
 import re
-from distutils.version import LooseVersion
+from easybuild.tools import LooseVersion
 
 import easybuild.tools.environment as env
 from easybuild.easyblocks.generic.configuremake import ConfigureMake
@@ -70,8 +70,11 @@ class EB_R(ConfigureMake):
         for dep in ['Tcl', 'Tk']:
             root = get_software_root(dep)
             if root:
-                dep_config = os.path.join(root, 'lib', '%sConfig.sh' % dep.lower())
-                self.cfg.update('configopts', '--with-%s-config=%s' % (dep.lower(), dep_config))
+                for libdir in ['lib', 'lib64']:
+                    dep_config = os.path.join(root, libdir, '%sConfig.sh' % dep.lower())
+                    if os.path.exists(dep_config):
+                        self.cfg.update('configopts', '--with-%s-config=%s' % (dep.lower(), dep_config))
+                        break
 
         if "--with-x=" not in self.cfg['configopts'].lower():
             if get_software_root('X11'):
@@ -126,10 +129,12 @@ class EB_R(ConfigureMake):
 
         libfiles = [os.path.join('include', x) for x in ['Rconfig.h', 'Rdefines.h', 'Rembedded.h',
                                                          'R.h', 'Rinterface.h', 'Rinternals.h',
-                                                         'Rmath.h', 'Rversion.h', 'S.h']]
+                                                         'Rmath.h', 'Rversion.h']]
         modfiles = ['internet.%s' % shlib_ext, 'lapack.%s' % shlib_ext]
         if LooseVersion(self.version) < LooseVersion('3.2'):
             modfiles.append('vfonts.%s' % shlib_ext)
+        if LooseVersion(self.version) < LooseVersion('4.2'):
+            libfiles += [os.path.join('include', 'S.h')]
         libfiles += [os.path.join('modules', x) for x in modfiles]
         libfiles += ['lib/libR.%s' % shlib_ext]
 
