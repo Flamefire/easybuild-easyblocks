@@ -67,7 +67,7 @@ replace-with = "vendored-sources"
 """
 
 CONFIG_TOML_SOURCE_GIT_BRANCH = """
-[source."{url}?rev={rev}&branch={branch}"]
+[source."{url}?rev={rev}"]
 git = "{url}"
 rev = "{rev}"
 branch = "{branch}"
