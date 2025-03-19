@@ -1,5 +1,5 @@
 ##
-# Copyright 2013-2024 Ghent University
+# Copyright 2013-2025 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -48,6 +48,13 @@ class EB_Mathematica(Binary):
             'activation_key': [None, "Activation key (expected format: 0000-0000-AAAAA)", CUSTOM],
         }
         return Binary.extra_options(extra_vars)
+
+    def __init__(self, *args, **kwargs):
+        """Easyblock constructor."""
+        super(EB_Mathematica, self).__init__(*args, **kwargs)
+
+        # custom paths in module load environment
+        self.module_load_environment.PATH = ['bin', 'Executables']
 
     def configure_step(self):
         """No configuration for Mathematica."""
@@ -109,7 +116,7 @@ class EB_Mathematica(Binary):
         if orig_display is not None:
             os.environ['DISPLAY'] = orig_display
 
-    def post_install_step(self):
+    def post_processing_step(self):
         """Activate installation by using activation key, if provided."""
         if self.cfg['activation_key']:
             # activation key is printed by using '$ActivationKey' in Mathematica, so no reason to keep it 'secret'
@@ -126,7 +133,7 @@ class EB_Mathematica(Binary):
         else:
             self.log.info("No activation key provided, so skipping activation of the installation.")
 
-        super(EB_Mathematica, self).post_install_step()
+        super(EB_Mathematica, self).post_processing_step()
 
     def sanity_check_step(self):
         """Custom sanity check for Mathematica."""
@@ -142,12 +149,3 @@ class EB_Mathematica(Binary):
         custom_commands = ['mathematica --version']
 
         super(EB_Mathematica, self).sanity_check_step(custom_paths=custom_paths, custom_commands=custom_commands)
-
-    def make_module_req_guess(self):
-        """Add both 'bin' and 'Executables' directories to PATH."""
-
-        guesses = super(EB_Mathematica, self).make_module_req_guess()
-
-        guesses.update({'PATH': ['bin', 'Executables']})
-
-        return guesses

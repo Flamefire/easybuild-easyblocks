@@ -1,5 +1,5 @@
 ##
-# Copyright 2009-2024 Ghent University
+# Copyright 2009-2025 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -64,8 +64,8 @@ class EB_Hadoop(Tarball):
                     raise EasyBuildError("%s not found. Failing install" % native_lib)
                 cmd += ' -Drequire.%s=true -D%s.prefix=%s' % (native_lib, native_lib, lib_root)
 
-            if self.cfg['parallel'] > 1:
-                cmd += " -T%d" % self.cfg['parallel']
+            if self.cfg.parallel > 1:
+                cmd += f" -T{self.cfg.parallel}"
             run_shell_cmd(cmd)
 
     def install_step(self):
@@ -76,7 +76,7 @@ class EB_Hadoop(Tarball):
         else:
             super(EB_Hadoop, self).install_step()
 
-    def post_install_step(self):
+    def post_processing_step(self):
         """After the install, copy the extra native libraries into place."""
         for native_library, lib_path in self.cfg['extra_native_libs']:
             lib_root = get_software_root(native_library)

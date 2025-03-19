@@ -1,5 +1,5 @@
 ##
-# Copyright 2018-2024 Ghent University
+# Copyright 2018-2025 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -52,6 +52,7 @@ class PythonBundle(Bundle):
             extra_vars = {}
         # combine custom easyconfig parameters of Bundle & PythonPackage
         extra_vars = Bundle.extra_options(extra_vars)
+        extra_vars['default_easyblock'][0] = 'PythonPackage'
         return PythonPackage.extra_options(extra_vars)
 
     def __init__(self, *args, **kwargs):

@@ -1,5 +1,5 @@
 ##
-# Copyright 2009-2024 Ghent University
+# Copyright 2009-2025 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -47,6 +47,11 @@ class EB_MRtrix(EasyBlock):
             self.build_in_installdir = True
             self.log.debug("Enabled build-in-installdir for version %s", self.version)
 
+        self.module_load_environment.PATH.append('scripts')
+
+        if LooseVersion(self.version) >= LooseVersion('3.0'):
+            self.module_load_environment.PYTHONPATH = ['lib']
+
     def extract_step(self):
         """Extract MRtrix sources."""
         # strip off 'mrtrix*' part to avoid having everything in a 'mrtrix*' subdirectory
@@ -69,8 +74,7 @@ class EB_MRtrix(EasyBlock):
 
     def build_step(self):
         """Custom build procedure for MRtrix."""
-        parallel = self.cfg['parallel']
-        env.setvar('NUMBER_OF_PROCESSORS', str(parallel))
+        env.setvar('NUMBER_OF_PROCESSORS', str(self.cfg.parallel))
 
         cmd = "python build -verbose"
         run_shell_cmd(cmd)
@@ -90,20 +94,6 @@ class EB_MRtrix(EasyBlock):
             copy(os.path.join(self.builddir, 'scripts'), self.installdir)
             # some scripts expect 'release/bin' to be there, so we put a symlink in place
             symlink(self.installdir, os.path.join(self.installdir, 'release'))
-
-    def make_module_req_guess(self):
-        """
-        Return list of subdirectories to consider to update environment variables;
-        also consider 'scripts' subdirectory for $PATH
-        """
-        guesses = super(EB_MRtrix, self).make_module_req_guess()
-
-        guesses['PATH'].append('scripts')
-
-        if LooseVersion(self.version) >= LooseVersion('3.0'):
-            guesses.setdefault('PYTHONPATH', []).append('lib')
-
-        return guesses
 
     def sanity_check_step(self):
         """Custom sanity check for MRtrix."""

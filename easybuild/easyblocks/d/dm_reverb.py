@@ -1,5 +1,5 @@
 ##
-# Copyright 2009-2024 Ghent University
+# Copyright 2009-2025 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -91,7 +91,7 @@ class EB_dm_minus_reverb(PythonPackage):
         # use JDK from EB
         bazel_build_opts += " --host_javabase=@local_jdk//:jdk"
         # explicitly set the number of processes
-        bazel_build_opts += " --jobs=%d" % self.cfg['parallel']
+        bazel_build_opts += f" --jobs={self.cfg.parallel}"
         # print full compilation commands
         bazel_build_opts += " --subcommands"
 
