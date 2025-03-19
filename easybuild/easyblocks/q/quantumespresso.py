@@ -1,5 +1,5 @@
 ##
-# Copyright 2009-2024 Ghent University
+# Copyright 2009-2025 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -28,6 +28,7 @@ EasyBuild support for Quantum ESPRESSO, implemented as an easyblock
 @author: Kenneth Hoste (Ghent University)
 @author: Ake Sandgren (HPC2N, Umea University)
 @author: Davide Grassano (CECAM, EPFL)
+@author: Jan Reuter (Juelich Supercomputing Centre)
 """
 
 import fileinput
@@ -84,6 +85,8 @@ class EB_QuantumESPRESSO(EasyBlock):
 
         # Required to avoid CMakeMake default extra_opts to override the ConfigMake ones
         new_ec = EasyConfig(ec.path, extra_options=eb.extra_options())
+        # Disable log file for nested EasyBlock
+        kwargs['logfile'] = self.logfile
         self.ebclass = eb(new_ec, *args, **kwargs)
 
     class EB_QuantumESPRESSOcmake(CMakeMake):
@@ -353,14 +356,10 @@ class EB_QuantumESPRESSO(EasyBlock):
                 return
 
             thr = self.cfg.get('test_suite_threshold', 0.97)
-            concurrent = max(1, self.cfg.get('parallel', 1) // self._test_nprocs)
+            concurrent = max(1, self.cfg.parallel // self._test_nprocs)
             allow_fail = self.cfg.get('test_suite_allow_failures', [])
 
-            cmd = ' '.join([
-                'ctest',
-                '-j%d' % concurrent,
-                '--output-on-failure',
-            ])
+            cmd = f'ctest -j{concurrent} --output-on-failure'
 
             res = run_shell_cmd(cmd, fail_on_error=False)
             out = res.output

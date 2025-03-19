@@ -1,5 +1,5 @@
 ##
-# Copyright 2009-2024 Ghent University
+# Copyright 2009-2025 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -227,8 +227,8 @@ class EB_Boost(EasyBlock):
                 self.bjamoptions += " -s%s_INCLUDE=%s/include" % (lib.upper(), libroot)
                 self.bjamoptions += " -s%s_LIBPATH=%s/lib" % (lib.upper(), libroot)
 
-        if self.cfg['parallel']:
-            self.paracmd = "-j %s" % self.cfg['parallel']
+        if self.cfg.parallel > 1:
+            self.paracmd = f"-j {self.cfg.parallel}"
         else:
             self.paracmd = ''
 

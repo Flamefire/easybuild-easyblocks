@@ -1,5 +1,5 @@
 ##
-# Copyright 2013-2024 Ghent University
+# Copyright 2013-2025 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -39,7 +39,7 @@ from easybuild.tools.filetools import apply_regex_substitutions
 from easybuild.tools.modules import get_software_root
 from easybuild.tools.run import run_shell_cmd
 from easybuild.tools.systemtools import get_cpu_architecture, get_glibc_version, get_shared_lib_ext
-from easybuild.tools.systemtools import AARCH64, POWER
+from easybuild.tools.systemtools import AARCH64, POWER, RISCV64
 
 
 class EB_Qt(ConfigureMake):
@@ -73,7 +73,7 @@ class EB_Qt(ConfigureMake):
         # if no platform is specified, try to derive it based on compiler in toolchain
         elif comp_fam in [toolchain.GCC]:  # @UndefinedVariable
             myarch = get_cpu_architecture()
-            if myarch == AARCH64:
+            if myarch in [AARCH64, RISCV64]:
                 platform = 'linux-g++'
             else:
                 platform = 'linux-g++-64'
@@ -161,7 +161,7 @@ class EB_Qt(ConfigureMake):
         # note that $NINJAFLAGS is not a generic thing for Ninja, it's very specific to the Qt5 build procedure
         if LooseVersion(self.version) >= LooseVersion('5'):
             if get_software_root('Ninja'):
-                env.setvar('NINJAFLAGS', '-j%s' % self.cfg['parallel'])
+                env.setvar('NINJAFLAGS', self.parallel_flag)
 
     def build_step(self):
         """Set $LD_LIBRARY_PATH before calling make, to ensure that all required libraries are found during linking."""

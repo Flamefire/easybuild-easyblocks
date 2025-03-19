@@ -1,5 +1,5 @@
 ##
-# Copyright 2017-2024 Ghent University
+# Copyright 2017-2025 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -473,7 +473,7 @@ class EB_TensorFlow(PythonPackage):
         if self.cfg['maxparallel'] is None:
             # Seemingly Bazel around 3.x got better, so double the max there
             bazel_max = 64 if get_bazel_version() < '3.0.0' else 128
-            self.cfg['parallel'] = min(self.cfg['parallel'], bazel_max)
+            self.cfg.parallel = min(self.cfg.parallel, bazel_max)
 
         # determine location where binutils' ld command is installed
         # note that this may be an RPATH wrapper script (when EasyBuild is configured with --rpath)
@@ -867,7 +867,7 @@ class EB_TensorFlow(PythonPackage):
         # https://docs.bazel.build/versions/master/user-manual.html#flag--verbose_failures
         self.target_opts.extend(['--subcommands', '--verbose_failures'])
 
-        self.target_opts.append('--jobs=%s' % self.cfg['parallel'])
+        self.target_opts.append(f'--jobs={self.cfg.parallel}')
 
         if self.toolchain.options.get('pic', None):
             self.target_opts.append('--copt="-fPIC"')
@@ -877,7 +877,14 @@ class EB_TensorFlow(PythonPackage):
         # this is required to make sure that Python packages included as extensions are found at build time;
         # see also https://github.com/tensorflow/tensorflow/issues/22395
         pythonpath = os.getenv('PYTHONPATH', '')
-        env.setvar('PYTHONPATH', os.pathsep.join([os.path.join(self.installdir, self.pylibdir), pythonpath]))
+        action_pythonpath = [os.path.join(self.installdir, self.pylibdir), pythonpath]
+        if LooseVersion(self.version) >= LooseVersion('2.14') and 'EBPYTHONPREFIXES' in os.environ:
+            # Since TF 2.14 the build uses hermetic python, which ignores sitecustomize.py from EB python;
+            # explicity include our site-packages here to respect EBPYTHONPREFIXERS, if that's prefered.
+            pyshortver = '.'.join(get_software_version('Python').split('.')[:2])
+            eb_pythonpath = os.path.join(os.getenv('EBROOTPYTHON'), 'lib', 'python' + pyshortver, 'site-packages')
+            action_pythonpath.append(eb_pythonpath)
+        env.setvar('PYTHONPATH', os.pathsep.join(action_pythonpath))
 
         # Make TF find our modules. LD_LIBRARY_PATH gets automatically added by configure.py
         cpaths, libpaths = self.system_libs_info[1:]
@@ -982,7 +989,7 @@ class EB_TensorFlow(PythonPackage):
         test_opts.append('--build_tests_only')  # Don't build tests which won't be executed
 
         # determine number of cores/GPUs to use for tests
-        max_num_test_jobs = int(self.cfg['test_max_parallel'] or self.cfg['parallel'])
+        max_num_test_jobs = self.cfg['test_max_parallel'] or self.cfg.parallel
         if self._with_cuda:
             if not which('nvidia-smi', on_error=IGNORE):
                 print_warning('Could not find nvidia-smi. Assuming a system without GPUs and skipping GPU tests!')

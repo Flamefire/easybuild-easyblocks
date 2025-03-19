@@ -1,5 +1,5 @@
 ##
-# Copyright 2015-2024 Ghent University
+# Copyright 2015-2025 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -56,9 +56,7 @@ class SCons(EasyBlock):
         Build with SCons
         """
 
-        par = ''
-        if self.cfg['parallel']:
-            par = "-j %s" % self.cfg['parallel']
+        par = f'-j {self.cfg.parallel}' if self.cfg.parallel > 1 else ''
 
         cmd = "%(prebuildopts)s scons %(par)s %(buildopts)s %(prefix)s" % {
             'buildopts': self.cfg['buildopts'],

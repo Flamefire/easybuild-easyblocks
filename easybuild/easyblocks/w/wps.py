@@ -1,5 +1,5 @@
 ##
-# Copyright 2009-2024 Ghent University
+# Copyright 2009-2025 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -80,6 +80,9 @@ class EB_WPS(EasyBlock):
         else:
             self.wps_subdir = 'WPS-%s' % self.version
 
+        self.module_load_environment.LD_LIBRARY_PATH = self.wps_subdir
+        self.module_load_environment.PATH = [self.wps_subdir, os.path.join(self.wps_subdir, 'util')]
+
     @staticmethod
     def extra_options():
         extra_vars = {
@@ -106,6 +109,9 @@ class EB_WPS(EasyBlock):
             wrfdir = os.path.join(wrf, det_wrf_subdir(get_software_version('WRF')))
         else:
             raise EasyBuildError("WRF module not loaded?")
+        netcdf_fortran = get_software_root('NETCDFMINFORTRAN')
+        if netcdf_fortran:
+            env.setvar('NETCDFF_DIR', netcdf_fortran)
 
         self.compile_script = 'compile'
 
@@ -385,14 +391,6 @@ class EB_WPS(EasyBlock):
             'dirs': [],
         }
         super(EB_WPS, self).sanity_check_step(custom_paths=custom_paths)
-
-    def make_module_req_guess(self):
-        """Make sure PATH and LD_LIBRARY_PATH are set correctly."""
-        return {
-            'PATH': [self.wps_subdir, os.path.join(self.wps_subdir, 'util')],
-            'LD_LIBRARY_PATH': [self.wps_subdir],
-            'MANPATH': [],
-        }
 
     def make_module_extra(self):
         """Add netCDF environment variables to module file."""
