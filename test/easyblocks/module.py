@@ -1,5 +1,5 @@
 ##
-# Copyright 2015-2024 Ghent University
+# Copyright 2015-2025 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -229,11 +229,15 @@ class ModuleOnlyTest(TestCase):
     def test_pythonpackage_pick_python_cmd(self):
         """Test pick_python_cmd function from pythonpackage.py."""
         from easybuild.easyblocks.generic.pythonpackage import pick_python_cmd
+        # Install a dummy Python to use. It only needs to echo the major, minor and patch version
+        tmpdir = tempfile.mkdtemp()
+        for cmd in ('python2', 'python2.6'):
+            install_fake_command(cmd, "#!/bin/bash\n echo 2.6.4", tmpdir)
         self.assertTrue(pick_python_cmd() is not None)
         self.assertTrue(pick_python_cmd(3) is not None)
         self.assertTrue(pick_python_cmd(3, 6) is not None)
         self.assertTrue(pick_python_cmd(123, 456) is None)
-        self.assertTrue(pick_python_cmd(2, 6, 123, 456) is not None)
+        self.assertTrue(pick_python_cmd(3, 6, 123, 456) is not None)
         self.assertTrue(pick_python_cmd(2, 6, 1, 1) is None)
 
 
@@ -443,8 +447,13 @@ def suite():
 
     for easyblock in easyblocks:
         eb_fn = os.path.basename(easyblock)
-        # dynamically define new inner functions that can be added as class methods to ModuleOnlyTest
+
         if eb_fn == 'systemcompiler.py':
+            # skip SystemCompiler, will be tested through its childs
+            continue
+
+        # dynamically define new inner functions that can be added as class methods to ModuleOnlyTest
+        if eb_fn == 'systemcompilergcc.py':
             # use GCC as name when testing SystemCompiler easyblock
             innertest = make_inner_test(easyblock, name='GCC', version='system')
         elif eb_fn == 'systemmpi.py':
@@ -462,6 +471,9 @@ def suite():
                        'inspector.py', 'itac.py', 'tbb.py', 'vtune.py']:
             # family of IntelBase easyblocks have a minimum version support based on currently supported toolchains
             innertest = make_inner_test(easyblock, name=eb_fn.replace('_', '-')[:-3], version='9999.9')
+        elif eb_fn == 'aocc.py':
+            # custom easyblock for AOCC expects a version it can map to a Clang version
+            innertest = make_inner_test(easyblock, name='AOCC', version='4.2.0')
         elif eb_fn == 'intel_compilers.py':
             # custom easyblock for intel-compilers (oneAPI) requires v2021.x or newer
             innertest = make_inner_test(easyblock, name='intel-compilers', version='2021.1')
@@ -471,6 +483,9 @@ def suite():
         elif eb_fn == 'paraver.py':
             # custom easyblock for Paraver requires version >= 4.7
             innertest = make_inner_test(easyblock, name='Paraver', version='4.8')
+        elif eb_fn == 'petsc.py':
+            # custom easyblock for PETSc has a minimum required version
+            innertest = make_inner_test(easyblock, name='PETSc', version='99.9')
         elif eb_fn in ['python.py', 'tkinter.py']:
             # custom easyblock for Python (ensurepip) requires version >= 3.4.0
             innertest = make_inner_test(easyblock, name=eb_fn.replace('_', '-')[:-3], version='3.4.0')

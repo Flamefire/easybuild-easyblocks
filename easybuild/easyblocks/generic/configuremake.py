@@ -1,5 +1,5 @@
 ##
-# Copyright 2009-2024 Ghent University
+# Copyright 2009-2025 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -210,6 +210,11 @@ class ConfigureMake(EasyBlock):
 
         self.config_guess = None
 
+    @property
+    def parallel_flag(self):
+        """Return the flag to enable parallelism or empty for serial"""
+        return f'-j {self.cfg.parallel}' if self.cfg.parallel > 1 else ''
+
     def obtain_config_guess(self, download_source_path=None, search_source_paths=None):
         """
         Locate or download an up-to-date config.guess for use with ConfigureMake
@@ -335,7 +340,7 @@ class ConfigureMake(EasyBlock):
         valid_actions = (ERROR, WARN, IGNORE)
         # Always verify the EC param
         if action not in valid_actions:
-            raise EasyBuildError('Invalid value for `unrecognized_configure_options`: %s. Must be one of: ',
+            raise EasyBuildError("Invalid value for 'unrecognized_configure_options': %s. Must be one of: %s",
                                  action, ', '.join(valid_actions))
         if action != IGNORE:
             unrecognized_options_str = 'configure: WARNING: unrecognized options:'
@@ -360,10 +365,6 @@ class ConfigureMake(EasyBlock):
         if verbose is not None:
             self.log.deprecated("The 'verbose' parameter to build_step is deprecated and unneeded.", '6.0')
 
-        paracmd = ''
-        if self.cfg['parallel']:
-            paracmd = "-j %s" % self.cfg['parallel']
-
         targets = self.cfg.get('build_cmd_targets') or DEFAULT_BUILD_TARGET
         # ensure strings are converted to list
         targets = [targets] if isinstance(targets, str) else targets
@@ -373,7 +374,7 @@ class ConfigureMake(EasyBlock):
                 self.cfg['prebuildopts'],
                 self.cfg.get('build_cmd') or DEFAULT_BUILD_CMD,
                 target,
-                paracmd,
+                self.parallel_flag,
                 self.cfg['buildopts'],
             ])
             self.log.info("Building target '%s'", target)

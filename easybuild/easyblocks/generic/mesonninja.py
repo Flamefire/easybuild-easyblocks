@@ -1,5 +1,5 @@
 ##
-# Copyright 2018-2024 Ghent University
+# Copyright 2018-2025 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -136,9 +136,7 @@ class MesonNinja(EasyBlock):
         """
         build_cmd = self.cfg.get('build_cmd', DEFAULT_BUILD_CMD)
 
-        parallel = ''
-        if self.cfg['parallel']:
-            parallel = "-j %s" % self.cfg['parallel']
+        parallel = f'-j {self.cfg.parallel}' if self.cfg.parallel > 1 else ''
 
         cmd = "%(prebuildopts)s %(build_cmd)s -v %(parallel)s %(buildopts)s" % {
             'buildopts': self.cfg['buildopts'],
@@ -164,9 +162,7 @@ class MesonNinja(EasyBlock):
         """
         install_cmd = self.cfg.get('install_cmd', DEFAULT_INSTALL_CMD)
 
-        parallel = ''
-        if self.cfg['parallel']:
-            parallel = "-j %s" % self.cfg['parallel']
+        parallel = f'-j {self.cfg.parallel}' if self.cfg.parallel > 1 else ''
 
         cmd = "%(preinstallopts)s %(install_cmd)s %(parallel)s %(installopts)s install" % {
             'installopts': self.cfg['installopts'],

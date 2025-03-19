@@ -1,5 +1,5 @@
 ##
-# Copyright 2009-2024 Ghent University
+# Copyright 2009-2025 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -75,6 +75,10 @@ class EB_WRF(EasyBlock):
         self.comp_fam = None
 
         self.wrfsubdir = det_wrf_subdir(self.version)
+
+        main_dir = os.path.join(self.wrfsubdir, 'main')
+        self.module_load_environment.LD_LIBRARY_PATH = main_dir
+        self.module_load_environment.PATH = main_dir
 
     @staticmethod
     def extra_options():
@@ -248,10 +252,7 @@ class EB_WRF(EasyBlock):
         """Build and install WRF and testcases using provided compile script."""
 
         # enable parallel build
-        par = self.cfg['parallel']
-        self.par = ''
-        if par:
-            self.par = "-j %s" % par
+        self.par = f'-j {self.cfg.parallel}' if self.cfg.parallel else ''
 
         # fix compile script shebang to use provided tcsh
         cmpscript = os.path.join(self.start_dir, 'compile')
@@ -324,7 +325,7 @@ class EB_WRF(EasyBlock):
             # determine number of MPI ranks to use in tests (1/2 of available processors + 1);
             # we need to limit max number of MPI ranks (8 is too high for some tests, 4 is OK),
             # since otherwise run may fail because domain size is too small
-            n_mpi_ranks = min(self.cfg['parallel'] // 2 + 1, 4)
+            n_mpi_ranks = min(self.cfg.parallel // 2 + 1, 4)
 
             # prepare run command
 
@@ -430,16 +431,6 @@ class EB_WRF(EasyBlock):
         }
 
         super(EB_WRF, self).sanity_check_step(custom_paths=custom_paths)
-
-    def make_module_req_guess(self):
-        """Path-like environment variable updates specific to WRF."""
-
-        maindir = os.path.join(self.wrfsubdir, 'main')
-        return {
-            'PATH': [maindir],
-            'LD_LIBRARY_PATH': [maindir],
-            'MANPATH': [],
-        }
 
     def make_module_extra(self):
         """Add netCDF environment variables to module file."""
