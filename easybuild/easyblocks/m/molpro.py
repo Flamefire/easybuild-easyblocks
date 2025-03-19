@@ -27,15 +27,16 @@ EasyBuild support for Molpro, implemented as an easyblock
 
 @author: Kenneth Hoste (Ghent University)
 """
+import glob
 import os
 import shutil
 import re
-from easybuild.tools import LooseVersion
 
 from easybuild.easyblocks.generic.binary import Binary
 from easybuild.easyblocks.generic.configuremake import ConfigureMake
 from easybuild.framework.easyblock import EasyBlock
 from easybuild.framework.easyconfig import CUSTOM
+from easybuild.tools import LooseVersion
 from easybuild.tools.build_log import EasyBuildError
 from easybuild.tools.config import build_option
 from easybuild.tools.filetools import apply_regex_substitutions, change_dir, mkdir, read_file, symlink
@@ -66,6 +67,14 @@ class EB_Molpro(ConfigureMake, Binary):
 
         self.cleanup_token_symlink = False
         self.license_token = os.path.join(os.path.expanduser('~'), '.molpro', 'token')
+
+        # custom paths in module load environment
+        # add glob patterns for all possible locations of executables, non-existent ones will be ignored
+        self.module_load_environment.PATH = [
+            'bin',
+            '*/bin',
+            '*/utilities',
+        ]
 
     def extract_step(self):
         """Extract Molpro source files, or just copy in case of binary install."""
@@ -148,8 +157,8 @@ class EB_Molpro(ConfigureMake, Binary):
 
             # determine MPI launcher command that can be used during build/test
             # obtain command with specific number of cores (required by mpi_cmd_for), then replace that number with '%n'
-            launcher = self.toolchain.mpi_cmd_for('%x', self.cfg['parallel'])
-            launcher = launcher.replace(' %s' % self.cfg['parallel'], ' %n')
+            launcher = self.toolchain.mpi_cmd_for('%x', self.cfg.parallel)
+            launcher = launcher.replace(f' {self.cfg.parallel}', ' %n')
 
             # patch CONFIG file to change LAUNCHER definition, in order to avoid having to start mpd
             apply_regex_substitutions(cfgfile, [(r"^(LAUNCHER\s*=\s*).*$", r"\1 %s" % launcher)])
@@ -177,7 +186,7 @@ class EB_Molpro(ConfigureMake, Binary):
 
             if build_option('mpi_tests'):
                 # extensive test
-                run_shell_cmd("make MOLPRO_OPTIONS='-n%s' test" % self.cfg['parallel'])
+                run_shell_cmd(f"make MOLPRO_OPTIONS='-n{self.cfg.parallel}' test")
             else:
                 self.log.info("Skipping extensive testing of Molpro since MPI testing is disabled")
 
@@ -234,17 +243,19 @@ class EB_Molpro(ConfigureMake, Binary):
             except OSError as err:
                 raise EasyBuildError("Failed to remove %s: %s", self.license_token, err)
 
-    def make_module_req_guess(self):
-        """Customize $PATH guesses for Molpro module."""
-        guesses = super(EB_Molpro, self).make_module_req_guess()
-        guesses.update({
-            'PATH': [os.path.join(os.path.basename(self.full_prefix), x) for x in ['bin', 'utilities']],
-        })
-        return guesses
-
     def sanity_check_step(self):
         """Custom sanity check for Molpro."""
         prefix_subdir = os.path.basename(self.full_prefix)
+        if not prefix_subdir:
+            # we need to guess the installation prefix whenever the configure step is skipped
+            # there are two possibles installation types:
+            #   - A: installation located at the top level of self.installdir
+            #   - B: installation located inside a subdirectory with a name specific to the
+            #        installation type and platform (e.g. molpros_2012_1_Linux_x86_64_i8)
+            path_to_bin = glob.glob(os.path.join(self.installdir, 'molpro*', 'bin'))
+            if len(path_to_bin) > 0:
+                prefix_subdir = os.path.relpath(os.path.dirname(path_to_bin[0]), self.installdir)
+
         files_to_check = ['bin/molpro']
         dirs_to_check = []
         if LooseVersion(self.version) >= LooseVersion('2015') or not self.cfg['precompiled_binaries']:

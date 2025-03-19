@@ -50,7 +50,7 @@ from easybuild.framework.extensioneasyblock import ExtensionEasyBlock
 from easybuild.tools.build_log import EasyBuildError, print_msg
 from easybuild.tools.config import build_option, PYTHONPATH, EBPYTHONPREFIXES
 from easybuild.tools.filetools import change_dir, mkdir, remove_dir, symlink, which
-from easybuild.tools.modules import get_software_root
+from easybuild.tools.modules import ModEnvVarType, get_software_root
 from easybuild.tools.run import run_shell_cmd, subprocess_popen_text
 from easybuild.tools.utilities import nub
 from easybuild.tools.hooks import CONFIGURE_STEP, BUILD_STEP, TEST_STEP, INSTALL_STEP
@@ -475,7 +475,6 @@ class PythonPackage(ExtensionEasyBlock):
         self.pylibdir = UNKNOWN
         self.all_pylibdirs = [UNKNOWN]
 
-        self.py_installopts = []
         self.install_cmd_output = ''
 
         # make sure there's no site.cfg in $HOME, because setup.py will find it and use it
@@ -500,8 +499,6 @@ class PythonPackage(ExtensionEasyBlock):
         # figure out whether this Python package is being installed for multiple Python versions
         self.multi_python = 'Python' in self.cfg['multi_deps']
 
-        # determine install command
-        self.use_setup_py = False
         self.determine_install_command()
 
         # avoid that pip (ab)uses $HOME/.cache/pip
@@ -514,11 +511,18 @@ class PythonPackage(ExtensionEasyBlock):
         # Don't let pip connect to PYPI to check for a new version
         env.setvar('PIP_DISABLE_PIP_VERSION_CHECK', 'true')
 
+        # avoid that lib subdirs are appended to $*LIBRARY_PATH if they don't provide libraries
+        # typically, only lib/pythonX.Y/site-packages should be added to $PYTHONPATH (see make_module_extra)
+        self.module_load_environment.LD_LIBRARY_PATH.type = ModEnvVarType.PATH_WITH_TOP_FILES
+        self.module_load_environment.LIBRARY_PATH.type = ModEnvVarType.PATH_WITH_TOP_FILES
+
     def determine_install_command(self):
         """
         Determine install command to use.
         """
+        self.py_installopts = []
         if self.cfg.get('use_pip', True) or self.cfg.get('use_pip_editable', False):
+            self.use_setup_py = False
             self.install_cmd = PIP_INSTALL_CMD
 
             pip_verbose = self.cfg.get('pip_verbose', None)
@@ -547,8 +551,8 @@ class PythonPackage(ExtensionEasyBlock):
         else:
             self.use_setup_py = True
             self.install_cmd = SETUP_PY_INSTALL_CMD
-            install_target = self.cfg.get_ref('install_target')
 
+            install_target = self.cfg.get_ref('install_target')
             if install_target == EASY_INSTALL_TARGET:
                 self.install_cmd += " %(loc)s"
                 self.py_installopts.append('--no-deps')
@@ -882,6 +886,9 @@ class PythonPackage(ExtensionEasyBlock):
                         actual_installdir = os.path.join(test_installdir, 'local')
                     else:
                         actual_installdir = test_installdir
+                    # Export the temporary installdir as an environment variable
+                    # Some tests (e.g. for astropy) require to be run in the installdir
+                    env.setvar('EB_PYTHONPACKAGE_TEST_INSTALLDIR', actual_installdir)
 
                     self.log.debug("Pre-creating subdirectories in %s: %s", actual_installdir, self.all_pylibdirs)
                     for pylibdir in self.all_pylibdirs:
@@ -1164,28 +1171,6 @@ class PythonPackage(ExtensionEasyBlock):
             parent_fail_msg += ', '
 
         return (parent_success and success, parent_fail_msg + fail_msg)
-
-    def make_module_req_guess(self):
-        """
-        Define list of subdirectories to consider for updating path-like environment variables ($PATH, etc.).
-        """
-        guesses = super(PythonPackage, self).make_module_req_guess()
-
-        # avoid that lib subdirs are appended to $*LIBRARY_PATH if they don't provide libraries
-        # typically, only lib/pythonX.Y/site-packages should be added to $PYTHONPATH (see make_module_extra)
-        for envvar in ['LD_LIBRARY_PATH', 'LIBRARY_PATH']:
-            newlist = []
-            for subdir in guesses[envvar]:
-                # only subdirectories that contain one or more files/libraries should be retained
-                fullpath = os.path.join(self.installdir, subdir)
-                if os.path.exists(fullpath):
-                    if any([os.path.isfile(os.path.join(fullpath, x)) for x in os.listdir(fullpath)]):
-                        newlist.append(subdir)
-            self.log.debug("Only retaining %s subdirs from %s for $%s (others don't provide any libraries)",
-                           newlist, guesses[envvar], envvar)
-            guesses[envvar] = newlist
-
-        return guesses
 
     def make_module_extra(self, *args, **kwargs):
         """Add install path to PYTHONPATH"""
