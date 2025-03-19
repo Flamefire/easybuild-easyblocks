@@ -1,5 +1,5 @@
 ##
-# Copyright 2009-2024 Ghent University
+# Copyright 2009-2025 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -122,17 +122,13 @@ class EB_Perl(ConfigureMake):
         """Test Perl build via 'make test'."""
         # allow escaping with runtest = False
         if self.cfg['runtest'] is None or self.cfg['runtest']:
-            parallel = self.cfg['parallel']
+            parallel = self.cfg.parallel
             if isinstance(self.cfg['runtest'], str):
                 cmd = "make %s" % self.cfg['runtest']
-            elif parallel and LooseVersion(self.version) >= LooseVersion('5.30.0'):
+            elif parallel > 1 and LooseVersion(self.version) >= LooseVersion('5.30.0'):
                 # run tests in parallel, see https://perldoc.perl.org/perlhack#Parallel-tests;
                 # only do this for Perl 5.30 and newer (conservative choice, actually supported in Perl >= 5.10.1)
-                cmd = ' '.join([
-                    'TEST_JOBS=%s' % parallel,
-                    'PERL_TEST_HARNESS_ASAP=1',
-                    "make -j %s test_harness" % parallel,
-                ])
+                cmd = f'TEST_JOBS={parallel} PERL_TEST_HARNESS_ASAP=1 make -j {parallel} test_harness',
             else:
                 cmd = "make test"
 
@@ -198,7 +194,7 @@ def get_major_perl_version():
     Returns the major verson of the perl binary in the current path
     """
     cmd = "perl -MConfig -e 'print $Config::Config{PERL_API_REVISION}'"
-    res = run_shell_cmd(cmd)
+    res = run_shell_cmd(cmd, hidden=True)
     return res.output
 
 
@@ -212,7 +208,7 @@ def get_site_suffix(tag):
     """
     perl_cmd = 'my $a = $Config::Config{"%s"}; $a =~ s/($Config::Config{"siteprefix"})//; print $a' % tag
     cmd = "perl -MConfig -e '%s'" % perl_cmd
-    res = run_shell_cmd(cmd)
+    res = run_shell_cmd(cmd, hidden=True)
     sitesuffix = res.output
     # obtained value usually contains leading '/', so strip it off
     return sitesuffix.lstrip(os.path.sep)

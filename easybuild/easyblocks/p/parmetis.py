@@ -1,5 +1,5 @@
 ##
-# Copyright 2009-2024 Ghent University
+# Copyright 2009-2025 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -102,9 +102,7 @@ class EB_ParMETIS(EasyBlock):
     def build_step(self):
         """Build ParMETIS (and METIS) using build_step."""
 
-        paracmd = ''
-        if self.cfg['parallel']:
-            paracmd = "-j %s" % self.cfg['parallel']
+        paracmd = f'-j {self.cfg.parallel}' if self.cfg.parallel > 1 else ''
 
         self.cfg.update('buildopts', 'LIBDIR=""')
 

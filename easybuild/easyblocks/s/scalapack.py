@@ -1,5 +1,5 @@
 ##
-# Copyright 2009-2024 Ghent University
+# Copyright 2009-2025 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -177,12 +177,7 @@ class EB_ScaLAPACK(CMakeMake):
         self.cfg.update('buildopts', 'lib')
         self.cfg.update('buildopts', ' '.join(extra_makeopts))
 
-        # Copied from ConfigureMake easyblock
-        paracmd = ''
-        if self.cfg['parallel']:
-            paracmd = "-j %s" % self.cfg['parallel']
-
-        cmd = "%s make %s %s" % (self.cfg['prebuildopts'], paracmd, self.cfg['buildopts'])
+        cmd = "%s make %s %s" % (self.cfg['prebuildopts'], self.parallel_flag, self.cfg['buildopts'])
 
         # Ignore exit code for parallel run
         run_shell_cmd(cmd, fail_on_error=False)
@@ -192,7 +187,7 @@ class EB_ScaLAPACK(CMakeMake):
         self.cfg.update('buildopts', ' '.join(extra_makeopts))
 
         remove_file('libscalapack.a')
-        self.cfg['parallel'] = 1
+        self.cfg.parallel = 1
 
     def build_step(self):
         """Build ScaLAPACK using make after setting make options."""
