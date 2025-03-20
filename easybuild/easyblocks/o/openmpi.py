@@ -1,5 +1,5 @@
 ##
-# Copyright 2019-2024 Ghent University
+# Copyright 2019-2025 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -219,7 +219,7 @@ class EB_OpenMPI(ConfigureMake):
         # Run with correct MPI launcher
         mpi_cmd_tmpl, params = get_mpi_cmd_template(toolchain.OPENMPI, dict(), mpi_version=self.version)
         # Limit number of ranks to 8 to avoid it failing due to hyperthreading
-        ranks = min(8, self.cfg['parallel'])
+        ranks = min(8, self.cfg.parallel)
         for srcdir, src, compiler in (
             ('examples', 'hello_c.c', 'mpicc'),
             ('examples', 'hello_mpifh.f', 'mpifort'),
@@ -243,7 +243,11 @@ class EB_OpenMPI(ConfigureMake):
                 if build_option('mpi_tests'):
                     params.update({'nr_ranks': ranks, 'cmd': test_exe})
                     # Allow oversubscription for this test (in case of hyperthreading)
-                    custom_commands.append("OMPI_MCA_rmaps_base_oversubscribe=1 " + mpi_cmd_tmpl % params)
+                    if LooseVersion(self.version) >= '5.0':
+                        extra_env = "PRTE_MCA_rmaps_default_mapping_policy=:oversubscribe"
+                    else:
+                        extra_env = "OMPI_MCA_rmaps_base_oversubscribe=1"
+                    custom_commands.append(extra_env + " " + mpi_cmd_tmpl % params)
                     # Run with 1 process which may trigger other bugs
                     # See https://github.com/easybuilders/easybuild-easyconfigs/issues/12978
                     params['nr_ranks'] = 1
