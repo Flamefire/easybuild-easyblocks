@@ -1,7 +1,7 @@
 ##
 # This file is an EasyBuild reciPY as per https://github.com/easybuilders/easybuild
 #
-# Copyright:: Copyright 2013-2019 CaSToRC, The Cyprus Institute
+# Copyright:: Copyright 2013-2025 CaSToRC, The Cyprus Institute
 # Authors::   George Tsouloupas <g.tsouloupas@cyi.ac.cy>
 # License::   MIT/GPL
 # $Id$
@@ -17,7 +17,7 @@ import glob
 import os
 import re
 import shutil
-from distutils.version import LooseVersion
+from easybuild.tools import LooseVersion
 
 import easybuild.tools.toolchain as toolchain
 from easybuild.easyblocks.generic.makecp import MakeCp
@@ -26,7 +26,7 @@ from easybuild.tools.build_log import EasyBuildError
 from easybuild.tools.config import build_option
 from easybuild.tools.filetools import apply_regex_substitutions, change_dir, extract_file
 from easybuild.tools.modules import get_software_root, get_software_version
-from easybuild.tools.run import run_cmd
+from easybuild.tools.run import run_shell_cmd
 from easybuild.tools.systemtools import POWER, X86_64, get_cpu_architecture
 
 
@@ -45,6 +45,7 @@ class EB_NAMD(MakeCp):
             'charm_arch': [None, "Charm++ target architecture", MANDATORY],
             'charm_extra_cxxflags': ['', "Extra C++ compiler options to use for building Charm++", CUSTOM],
             'charm_opts': ['--with-production', "Charm++ build options", CUSTOM],
+            'cuda': [None, "Enable CUDA build if CUDA is among the dependencies", CUSTOM],
             'namd_basearch': [None, "NAMD base target architecture (compiler family is appended)", CUSTOM],
             'namd_cfg_opts': ['', "NAMD configure options", CUSTOM],
             'runtest': [True, "Run NAMD test case after building", CUSTOM],
@@ -86,6 +87,26 @@ class EB_NAMD(MakeCp):
         srcdir = extract_file(self.charm_tarballs[0], os.getcwd(), change_into_dir=False)
         change_dir(srcdir)
 
+    def patch_step(self, *args, **kwargs):
+        """Patch scripts to avoid using hardcoded /bin/csh."""
+        super(EB_NAMD, self).patch_step(*args, **kwargs)
+
+        self.charm_dir = self.charm_tarballs[0][:-4]
+
+        # NAMD-3.0 depends on charm-8.0.0 that uses Automake. The 'configure' file was
+        # removed in favour of 'configure.ac'
+        configure_file_name = 'configure'
+        if LooseVersion(self.version) >= LooseVersion('3.0'):
+            configure_file_name = 'configure.ac'
+
+        charm_config = os.path.join(self.charm_dir, 'src', 'scripts', configure_file_name)
+        apply_regex_substitutions(charm_config, [(r'SHELL=/bin/csh', 'SHELL=$(which csh)')])
+
+        for csh_script in [os.path.join('plugins', 'import_tree'), os.path.join('psfgen', 'import_tree'),
+                           os.path.join(self.charm_dir, 'src', 'QuickThreads', 'time', 'raw')]:
+            if os.path.exists(csh_script):
+                apply_regex_substitutions(csh_script, [(r'^#!\s*/bin/csh\s*$', '#!/usr/bin/env csh')])
+
     def configure_step(self):
         """Custom configure step for NAMD, we build charm++ first (if required)."""
 
@@ -119,15 +140,18 @@ class EB_NAMD(MakeCp):
         self.namd_arch = '%s-%s' % (self.cfg['namd_basearch'], namd_comp)
         self.log.info("Completed NAMD target architecture: %s", self.namd_arch)
 
-        cmd = "./build charm++ %(arch)s %(opts)s --with-numa -j%(parallel)s '%(cxxflags)s'" % {
+        build_cmd = './build'
+
+        cmd = "%(build_cmd)s charm++ %(arch)s %(opts)s --with-numa -j%(parallel)s '%(cxxflags)s'" % {
+            'build_cmd': build_cmd,
             'arch': self.cfg['charm_arch'],
             'cxxflags': os.environ['CXXFLAGS'] + ' -DMPICH_IGNORE_CXX_SEEK ' + self.cfg['charm_extra_cxxflags'],
             'opts': self.cfg['charm_opts'],
-            'parallel': self.cfg['parallel'],
+            'parallel': self.cfg.parallel,
         }
         charm_subdir = '.'.join(os.path.basename(self.charm_tarballs[0]).split('.')[:-1])
         self.log.debug("Building Charm++ using cmd '%s' in '%s'" % (cmd, charm_subdir))
-        run_cmd(cmd, path=charm_subdir)
+        run_shell_cmd(cmd, work_dir=charm_subdir)
 
         # compiler (options)
         self.cfg.update('namd_cfg_opts', '--cc "%s" --cc-opts "%s"' % (os.environ['CC'], os.environ['CFLAGS']))
@@ -138,8 +162,12 @@ class EB_NAMD(MakeCp):
 
         # NAMD dependencies: CUDA, TCL, FFTW
         cuda = get_software_root('CUDA')
-        if cuda:
+        if cuda and (self.cfg['cuda'] is None or self.cfg['cuda']):
             self.cfg.update('namd_cfg_opts', "--with-cuda --cuda-prefix %s" % cuda)
+        elif not self.cfg['cuda']:
+            self.log.warning("CUDA is disabled")
+        elif not cuda and self.cfg['cuda']:
+            raise EasyBuildError("CUDA is not a dependency, but support for CUDA is enabled.")
 
         tcl = get_software_root('Tcl')
         if tcl:
@@ -162,7 +190,7 @@ class EB_NAMD(MakeCp):
 
         namd_charm_arch = "--charm-arch %s" % '-'.join(self.cfg['charm_arch'].strip().split())
         cmd = "./config %s %s %s " % (self.namd_arch, namd_charm_arch, self.cfg["namd_cfg_opts"])
-        run_cmd(cmd)
+        run_shell_cmd(cmd)
 
     def build_step(self):
         """Build NAMD for configured architecture"""
@@ -182,19 +210,20 @@ class EB_NAMD(MakeCp):
             ppn = ''
             if self.toolchain.options.get('openmp', False):
                 ppn = '+ppn 2'
-            cmd = "%(namd)s %(ppn)s %(testdir)s" % {
+            cmd = "%(pretestopts)s %(namd)s %(ppn)s %(testopts)s %(testdir)s" % {
                 'namd': namdcmd,
                 'ppn': ppn,
+                'pretestopts': self.cfg['pretestopts'],
                 'testdir': os.path.join(self.cfg['start_dir'], self.namd_arch, 'src', 'alanin'),
+                'testopts': self.cfg['testopts'],
             }
-            out, ec = run_cmd(cmd, simple=False)
-            if ec == 0:
-                test_ok_regex = re.compile(r"(^Program finished.$|End of program\s*$)", re.M)
-                if test_ok_regex.search(out):
-                    self.log.debug("Test '%s' ran fine." % cmd)
-                else:
-                    raise EasyBuildError("Test '%s' failed ('%s' not found), output: %s",
-                                         cmd, test_ok_regex.pattern, out)
+            res = run_shell_cmd(cmd)
+            test_ok_regex = re.compile(r"(^Program finished.$|End of program\s*$)", re.M)
+            if test_ok_regex.search(res.output):
+                self.log.debug("Test '%s' ran fine." % cmd)
+            else:
+                raise EasyBuildError("Test '%s' failed ('%s' not found), output: %s", cmd, test_ok_regex.pattern,
+                                     res.output)
         else:
             self.log.debug("Skipping running NAMD test case after building")
 

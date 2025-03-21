@@ -1,5 +1,5 @@
 ##
-# Copyright 2009-2021 Ghent University
+# Copyright 2009-2025 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -25,7 +25,7 @@
 """
 EasyBuild support for building and installing Bazel, implemented as an easyblock
 """
-from distutils.version import LooseVersion
+from easybuild.tools import LooseVersion
 import glob
 import os
 import tempfile
@@ -35,7 +35,7 @@ from easybuild.framework.easyblock import EasyBlock
 from easybuild.tools.build_log import EasyBuildError
 from easybuild.tools.filetools import apply_regex_substitutions, copy_file, which
 from easybuild.tools.modules import get_software_root, get_software_version
-from easybuild.tools.run import run_cmd
+from easybuild.tools.run import run_shell_cmd
 from easybuild.framework.easyconfig import CUSTOM
 
 
@@ -52,7 +52,15 @@ class EB_Bazel(EasyBlock):
         return EasyBlock.extra_options(extra_vars)
 
     def fixup_hardcoded_paths(self):
-        """Patch out hard coded paths to compiler and binutils tools"""
+        """Patch out hard coded paths to /tmp, compiler and binutils tools"""
+        # replace hardcoded /tmp in java build scripts
+        regex_subs = [
+            (r'`mktemp -d /tmp/tmp.XXXXXXXXXX`', '$$(mktemp -d $${TMPDIR:-/tmp}/tmp.XXXXXXXXXX)'),
+        ]
+        filepath = os.path.join('src', 'main', 'java', 'com', 'google', 'devtools', 'build', 'lib', 'BUILD')
+        if os.path.exists(filepath):
+            apply_regex_substitutions(filepath, regex_subs)
+
         binutils_root = get_software_root('binutils')
         gcc_root = get_software_root('GCCcore') or get_software_root('GCC')
         gcc_ver = get_software_version('GCCcore') or get_software_version('GCC')
@@ -111,7 +119,24 @@ class EB_Bazel(EasyBlock):
         """Setup bazel output root"""
         super(EB_Bazel, self).prepare_step(*args, **kwargs)
         self.bazel_tmp_dir = tempfile.mkdtemp(suffix='-bazel-tmp', dir=self.builddir)
-        self.output_user_root = tempfile.mkdtemp(suffix='-bazel-root', dir=self.builddir)
+        self._make_output_user_root()
+
+    def _make_output_user_root(self):
+        if not os.path.isdir(self.builddir):
+            # Can happen on module-only or sanity-check-only runs
+            self.log.info("Using temporary folder for user_root as builddir doesn't exist")
+            dir = None  # Will use the EB created temp dir
+        else:
+            dir = self.builddir
+        self._output_user_root = tempfile.mkdtemp(suffix='-bazel-root', dir=dir)
+
+    @property
+    def output_user_root(self):
+        try:
+            return self._output_user_root
+        except AttributeError:
+            self._make_output_user_root()
+            return self._output_user_root
 
     def extract_step(self):
         """Extract Bazel sources."""
@@ -123,9 +148,9 @@ class EB_Bazel(EasyBlock):
     def configure_step(self):
         """Custom configuration procedure for Bazel."""
 
-        # Last instance of hardcoded paths was removed in 0.24.0
-        if LooseVersion(self.version) < LooseVersion('0.24.0'):
-            self.fixup_hardcoded_paths()
+        # Last instance of hardcoded compiler/binutils paths was removed in 0.24.0, however
+        # hardcoded /tmp affects all versions
+        self.fixup_hardcoded_paths()
 
         # Keep temporary directory in case of error. EB will clean it up on success
         apply_regex_substitutions(os.path.join('scripts', 'bootstrap', 'buildenv.sh'), [
@@ -133,13 +158,17 @@ class EB_Bazel(EasyBlock):
         ])
 
         # enable building in parallel
-        bazel_args = '--jobs=%d' % self.cfg['parallel']
+        bazel_args = f'--jobs={self.cfg.parallel}'
 
         # Bazel provides a JDK by itself for some architectures
         # We want to enforce it using the JDK we provided via modules
         # This is required for Power where Bazel does not have a JDK, but requires it for building itself
         # See https://github.com/bazelbuild/bazel/issues/10377
-        bazel_args += ' --host_javabase=@local_jdk//:jdk'
+        if LooseVersion(self.version) >= LooseVersion('7.0'):
+            # Option changed in Bazel 7.x, see https://github.com/bazelbuild/bazel/issues/22789
+            bazel_args += ' --tool_java_runtime_version=local_jdk'
+        else:
+            bazel_args += ' --host_javabase=@local_jdk//:jdk'
 
         # Link C++ libs statically, see https://github.com/bazelbuild/bazel/issues/4137
         static = self.cfg['static']
@@ -161,7 +190,7 @@ class EB_Bazel(EasyBlock):
             self.cfg['prebuildopts'],
             "bash -c 'set -x && ./compile.sh'",  # Show the commands the script is running to faster debug failures
         ])
-        run_cmd(cmd, log_all=True, simple=True, log_ok=True)
+        run_shell_cmd(cmd)
 
     def test_step(self):
         """Test the compilation"""
@@ -177,7 +206,7 @@ class EB_Bazel(EasyBlock):
                 # Avoid bazel using $HOME
                 '--output_user_root=%s' % self.output_user_root,
                 runtest,
-                '--jobs=%d' % self.cfg['parallel'],
+                f'--jobs={self.cfg.parallel}',
                 '--host_javabase=@local_jdk//:jdk',
                 # Be more verbose
                 '--subcommands', '--verbose_failures',
@@ -185,7 +214,7 @@ class EB_Bazel(EasyBlock):
                 '--build_tests_only',
                 self.cfg['testopts']
             ])
-            run_cmd(cmd, log_all=True, simple=True)
+            run_shell_cmd(cmd)
 
     def install_step(self):
         """Custom install procedure for Bazel."""
@@ -197,4 +226,9 @@ class EB_Bazel(EasyBlock):
             'files': ['bin/bazel'],
             'dirs': [],
         }
-        super(EB_Bazel, self).sanity_check_step(custom_paths=custom_paths)
+        custom_commands = []
+        if LooseVersion(self.version) >= LooseVersion('1.0'):
+            # Avoid writes to $HOME
+            custom_commands.append("bazel --output_user_root=%s --help" % self.output_user_root)
+
+        super(EB_Bazel, self).sanity_check_step(custom_paths=custom_paths, custom_commands=custom_commands)

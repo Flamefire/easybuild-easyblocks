@@ -1,5 +1,5 @@
 ##
-# Copyright 2009-2021 Ghent University
+# Copyright 2009-2025 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -42,7 +42,7 @@ import glob
 import re
 import os
 import sys
-from distutils.version import LooseVersion
+from easybuild.tools import LooseVersion
 
 import easybuild.tools.toolchain as toolchain
 from easybuild.framework.easyblock import EasyBlock
@@ -52,7 +52,7 @@ from easybuild.tools.environment import setvar
 from easybuild.tools.filetools import change_dir, copy_dir, copy_file, mkdir, write_file
 from easybuild.tools.config import build_option
 from easybuild.tools.modules import get_software_root, get_software_version
-from easybuild.tools.run import run_cmd
+from easybuild.tools.run import run_shell_cmd
 from easybuild.tools.systemtools import get_avail_core_count
 
 
@@ -265,7 +265,7 @@ class EB_CP2K(EasyBlock):
             mkdir(modincpath, parents=True)
 
             # get list of modinc source files
-            modincdir = os.path.join(imkl, self.cfg["modincprefix"], 'include')
+            modincdir = os.path.join(os.getenv('MKLROOT'), self.cfg["modincprefix"], 'include')
 
             if isinstance(self.cfg["modinc"], list):
                 modfiles = [os.path.join(modincdir, x) for x in self.cfg["modinc"]]
@@ -290,7 +290,7 @@ class EB_CP2K(EasyBlock):
                 else:
                     raise EasyBuildError("prepmodinc: Unknown value specified for F77 (%s)", f77)
 
-                run_cmd(cmd, log_all=True, simple=True)
+                run_shell_cmd(cmd)
 
             return modincpath
         else:
@@ -392,7 +392,8 @@ class EB_CP2K(EasyBlock):
 
                 # build libint wrapper
                 cmd = "%s -c libint_cpp_wrapper.cpp -I%s/include" % (libintcompiler, libint)
-                if not run_cmd(cmd, log_all=True, simple=True):
+                res = run_shell_cmd(cmd, fail_on_error=False)
+                if res.exit_code:
                     raise EasyBuildError("Building the libint wrapper failed")
                 libint_wrapper = '%s/libint_cpp_wrapper.o' % libinttools_path
 
@@ -440,6 +441,16 @@ class EB_CP2K(EasyBlock):
         else:
             self.log.info("libxc module not loaded, so building without libxc support")
 
+        libvori = get_software_root('libvori')
+        if libvori:
+            if LooseVersion(self.version) >= LooseVersion('8.1'):
+                options['LIBS'] += ' -lvori'
+                options['DFLAGS'] += ' -D__LIBVORI'
+            else:
+                raise EasyBuildError("This version of CP2K does not suppport libvori")
+        else:
+            self.log.info("libvori module not loaded, so building without support for Voronoi integration")
+
         return options
 
     def configure_intel_based(self):
@@ -474,7 +485,16 @@ class EB_CP2K(EasyBlock):
         options['FCFLAGSOPT'] += ' $(INCFLAGS) -heap-arrays 64'
         options['FCFLAGSOPT2'] += ' $(INCFLAGS) -heap-arrays 64'
 
-        ifortver = LooseVersion(get_software_version('ifort'))
+        # for recent intel toolchains (>= intel/2021a), intel-compilers is the toolchain component
+        ifortver = get_software_version('intel-compilers')
+        if ifortver is None:
+            # fall back to trying to determining Intel Fortran compiler version using 'ifort' as software name
+            ifortver = get_software_version('ifort')
+
+        if ifortver:
+            ifortver = LooseVersion(ifortver)
+        else:
+            raise EasyBuildError("Failed to determine Intel Fortran compiler version!")
 
         # Required due to memory leak that occurs if high optimizations are used (from CP2K 7.1 intel-popt-makefile)
         if ifortver >= LooseVersion("2018.5"):
@@ -511,7 +531,7 @@ class EB_CP2K(EasyBlock):
                 raise EasyBuildError(failmsg, "v12", "v2011.8")
 
         elif ifortver >= LooseVersion("11"):
-            if LooseVersion(get_software_version('ifort')) >= LooseVersion("11.1.072"):
+            if ifortver >= LooseVersion("11.1.072"):
                 self.make_instructions += "qs_vxc_atom.o: qs_vxc_atom.F\n\t$(FC) -c $(FCFLAGS2) $<\n"
 
             else:
@@ -598,7 +618,10 @@ class EB_CP2K(EasyBlock):
         else:
             # only use Intel FFTW wrappers if FFTW is not loaded
             options['CFLAGS'] += ' -I$(INTEL_INCF)'
-            options['DFLAGS'] += ' -D__FFTMKL'
+            if LooseVersion(self.version) > LooseVersion('2.3'):
+                options['DFLAGS'] += ' -D__MKL'
+            else:
+                options['DFLAGS'] += ' -D__FFTMKL'
             options['INTEL_INCF'] = '$(INTEL_INC)/fftw'
             options['LIBS'] = '%s %s' % (os.getenv('LIBFFT', ''), options['LIBS'])
 
@@ -646,18 +669,17 @@ class EB_CP2K(EasyBlock):
             change_dir(makefiles)
 
             # modify makefile for parallel build
-            parallel = self.cfg['parallel']
-            if parallel:
-
+            parallel = self.cfg.parallel
+            if parallel > 1:
                 try:
                     for line in fileinput.input('Makefile', inplace=1, backup='.orig.patchictce'):
-                        line = re.sub(r"^PMAKE\s*=.*$", "PMAKE\t= $(SMAKE) -j %s" % parallel, line)
+                        line = re.sub(r"^PMAKE\s*=.*$", f"PMAKE\t= $(SMAKE) -j {parallel}", line)
                         sys.stdout.write(line)
                 except IOError as err:
                     raise EasyBuildError("Can't modify/write Makefile in %s: %s", makefiles, err)
 
         # update make options with MAKE
-        self.cfg.update('buildopts', 'MAKE="make -j %s"' % self.cfg['parallel'])
+        self.cfg.update('buildopts', f'MAKE="make -j {self.cfg.parallel}"')
 
         # update make options with ARCH and VERSION
         self.cfg.update('buildopts', 'ARCH=%s VERSION=%s' % (self.typearch, self.cfg['type']))
@@ -665,12 +687,16 @@ class EB_CP2K(EasyBlock):
         cmd = "make %s" % self.cfg['buildopts']
 
         # clean first
-        run_cmd(cmd + " clean", log_all=True, simple=True, log_output=True)
+        run_shell_cmd(cmd + " clean")
 
         # build and install
+        # compile regularly first with the default make target
+        # and only then build the library
+        run_shell_cmd(cmd + ' all')
+
+        # build as a library
         if self.cfg['library']:
-            cmd += ' libcp2k'
-        run_cmd(cmd + " all", log_all=True, simple=True, log_output=True)
+            run_shell_cmd(cmd + 'libcp2k')
 
     def test_step(self):
         """Run regression test."""
@@ -701,13 +727,20 @@ class EB_CP2K(EasyBlock):
                     break
 
             # location of do_regtest script
-            cfg_fn = "cp2k_regtest.cfg"
+            cfg_fn = 'cp2k_regtest.cfg'
+
             regtest_script = os.path.join(self.cfg['start_dir'], 'tools', 'regtesting', 'do_regtest')
-            regtest_cmd = "%s -nosvn -nobuild -config %s" % (regtest_script, cfg_fn)
+            regtest_cmd = [regtest_script, '-nobuild', '-config', cfg_fn]
+            if LooseVersion(self.version) < LooseVersion('7.1'):
+                # -nosvn option was removed in CP2K 7.1
+                regtest_cmd.insert(1, '-nosvn')
+
             # older version of CP2K
             if not os.path.exists(regtest_script):
                 regtest_script = os.path.join(self.cfg['start_dir'], 'tools', 'do_regtest')
-                regtest_cmd = "%s -nocvs -quick -nocompile -config %s" % (regtest_script, cfg_fn)
+                regtest_cmd = [regtest_script, '-nocvs', '-quick', '-nocompile', '-config', cfg_fn]
+
+            regtest_cmd = ' '.join(regtest_cmd)
 
             # patch do_regtest so that reference output is used
             if regtest_refdir:
@@ -723,7 +756,7 @@ class EB_CP2K(EasyBlock):
                 self.log.info("No reference output found for regression test, just continuing without it...")
 
             # prefer using 4 cores, since some tests require/prefer square (n^2) numbers or powers of 2 (2^n)
-            test_core_cnt = min(self.cfg['parallel'], 4)
+            test_core_cnt = min(self.cfg.parallel, 4)
             if get_avail_core_count() < test_core_cnt:
                 raise EasyBuildError("Cannot run MPI tests as not enough cores (< %s) are available", test_core_cnt)
             else:
@@ -754,19 +787,19 @@ class EB_CP2K(EasyBlock):
             self.log.debug("Contents of %s: %s" % (cfg_fn, cfg_txt))
 
             # run regression test
-            (regtest_output, ec) = run_cmd(regtest_cmd, log_all=True, simple=False, log_output=True)
+            regtest = run_shell_cmd(regtest_cmd, fail_on_error=False)
 
-            if ec == 0:
-                self.log.info("Regression test output:\n%s" % regtest_output)
+            if regtest.exit_code == 0:
+                self.log.info("Regression test output:\n%s" % regtest.output)
             else:
-                raise EasyBuildError("Regression test failed (non-zero exit code): %s", regtest_output)
+                raise EasyBuildError("Regression test failed (non-zero exit code): %s", regtest.output)
 
             # pattern to search for regression test summary
             re_pattern = r"number\s+of\s+%s\s+tests\s+(?P<cnt>[0-9]+)"
 
             # find total number of tests
             regexp = re.compile(re_pattern % "", re.M | re.I)
-            res = regexp.search(regtest_output)
+            res = regexp.search(regtest.output)
             tot_cnt = None
             if res:
                 tot_cnt = int(res.group('cnt'))
@@ -783,7 +816,7 @@ class EB_CP2K(EasyBlock):
                 regexp = re.compile(re_pattern % test_result, re.M | re.I)
 
                 cnt = None
-                res = regexp.search(regtest_output)
+                res = regexp.search(regtest.output)
                 if not res:
                     raise EasyBuildError("Finding number of %s tests in regression test summary failed",
                                          test_result.lower())
@@ -812,9 +845,11 @@ class EB_CP2K(EasyBlock):
             self.postmsg += test_report("FAILED")
             self.postmsg += test_report("WRONG")
 
-            # number of new tests, will be high if a non-suitable regtest reference was used
-            # will report error if count is positive (is that what we want?)
-            self.postmsg += test_report("NEW")
+            # there are no more 'new' tests from CP2K 8.1 onwards
+            if LooseVersion(self.version) < LooseVersion('8.0'):
+                # number of new tests, will be high if a non-suitable regtest reference was used
+                # will report error if count is positive (is that what we want?)
+                self.postmsg += test_report("NEW")
 
             # number of correct tests: just report
             test_report("CORRECT")

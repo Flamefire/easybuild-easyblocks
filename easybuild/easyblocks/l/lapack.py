@@ -1,5 +1,5 @@
 ##
-# Copyright 2009-2021 Ghent University
+# Copyright 2009-2025 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -31,7 +31,7 @@ EasyBuild support for building and installing LAPACK, implemented as an easybloc
 @author: Pieter De Baets (Ghent University)
 @author: Jens Timmerman (Ghent University)
 """
-
+from easybuild.tools import LooseVersion
 import glob
 import os
 
@@ -44,7 +44,7 @@ from easybuild.toolchains.linalg.openblas import OpenBLAS
 from easybuild.tools.build_log import EasyBuildError
 from easybuild.tools.filetools import copy_file
 from easybuild.tools.modules import get_software_root
-from easybuild.tools.run import run_cmd
+from easybuild.tools.run import run_shell_cmd
 
 
 class EB_LAPACK(ConfigureMake):
@@ -100,11 +100,32 @@ class EB_LAPACK(ConfigureMake):
         else:
             copy_file(src, dest)
 
+        # control compiler commands being used
+        self.cfg.update('buildopts', 'CC="%s"' % os.getenv('CC'))
+        # older versions use FORTRAN, newer versions use FC for Fortran compiler command
+        if LooseVersion(self.version) >= LooseVersion('3.9.0'):
+            fc_var = 'FC'
+        else:
+            fc_var = 'FORTRAN'
+        self.cfg.update('buildopts', '%s="%s"' % (fc_var, os.getenv('FC')))
+
         # set optimization flags
+
+        self.cfg.update('buildopts', 'CFLAGS="%s"' % os.getenv('CFLAGS'))
+
+        # Fortran compiler flags are controlled via OPTS in older version, via FFLAGS in newer versions
+        if LooseVersion(self.version) >= LooseVersion('3.9.0'):
+            fflags_var = 'FFLAGS'
+            noopt_var = 'FFLAGS_NOOPT'
+        else:
+            fflags_var = 'OPTS'
+            noopt_var = 'NOOPT'
+        self.cfg.update('buildopts', '%s="%s"' % (fflags_var, os.getenv('FFLAGS')))
+
         fpic = ''
         if self.toolchain.options['pic']:
             fpic = '-fPIC'
-        self.cfg.update('buildopts', 'OPTS="$FFLAGS -m64" NOOPT="%s -m64 -O0"' % fpic)
+        self.cfg.update('buildopts', '%s="%s -O0"' % (noopt_var, fpic))
 
         # prematurely exit configure when we're only testing
         if self.cfg['test_only']:
@@ -194,7 +215,7 @@ class EB_LAPACK(ConfigureMake):
             for lib in ["blas", "lapack"]:
                 self.log.info("Running %s tests..." % lib.upper())
                 cmd = "make BLASLIB='%s' %s_testing" % (blaslib, lib)
-                run_cmd(cmd, log_all=True, simple=True)
+                run_shell_cmd(cmd)
         else:
             super(EB_LAPACK, self).test_step()
 

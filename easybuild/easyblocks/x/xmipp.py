@@ -1,5 +1,5 @@
 ##
-# Copyright 2015-2021 Ghent University
+# Copyright 2015-2025 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -34,13 +34,13 @@ import glob
 import os
 
 import easybuild.tools.environment as env
-from distutils.version import LooseVersion
+from easybuild.tools import LooseVersion
 from easybuild.easyblocks.generic.scons import SCons
 from easybuild.tools.build_log import EasyBuildError
 from easybuild.tools.filetools import apply_regex_substitutions, change_dir
 from easybuild.tools.filetools import copy_file, mkdir, remove_file, symlink
 from easybuild.tools.modules import get_software_root, get_software_version
-from easybuild.tools.run import run_cmd
+from easybuild.tools.run import run_shell_cmd
 from easybuild.tools.systemtools import get_shared_lib_ext
 
 
@@ -50,24 +50,45 @@ class EB_Xmipp(SCons):
     def __init__(self, *args, **kwargs):
         """Initialize Xmipp-specific variables."""
         super(EB_Xmipp, self).__init__(*args, **kwargs)
+
         self.xmipp_modules = ['xmippCore', 'xmipp', 'xmippViz']
-        self.srcdir = os.path.join(self.builddir, 'src')
-        self.cfg['start_dir'] = self.builddir
+
+        if LooseVersion(self.version) >= LooseVersion('3.20.07'):
+            self.cfg['start_dir'] = os.path.join(self.builddir, 'xmipp-' + self.version)
+            self.srcdir = os.path.join(self.cfg['start_dir'], 'src')
+            self.cfgfile = os.path.join(self.cfg['start_dir'], 'xmipp.conf')
+            self.xmipp_exe = './xmipp'
+        else:
+            self.cfg['start_dir'] = self.builddir
+            self.srcdir = os.path.join(self.builddir, 'src')
+            self.cfgfile = os.path.join(self.builddir, 'xmipp.conf')
+            self.xmipp_exe = os.path.join(self.srcdir, 'xmipp', 'xmipp')
+
         self.use_cuda = False
-        self.cfgfile = os.path.join(self.builddir, 'xmipp.conf')
+
+        self.module_load_environment.LD_LIBRARY_PATH = ['lib', os.path.join('bindings', 'python')]
+        self.module_load_environment.PYTHONPATH = [os.path.join('bindings', 'python'), 'pylib']
 
     def extract_step(self):
         """Extract Xmipp sources."""
-        # Xmipp assumes that everything is unpacked in a "src" dir
-        mkdir(self.srcdir)
-        self.cfg.update('unpack_options', '--directory %s' % os.path.basename(self.srcdir))
+        if LooseVersion(self.version) < LooseVersion('3.20.07'):
+            # Xmipp < 3.20.07 assumes that everything is unpacked in a "src" dir
+            # Xmipp >= 3.20.07 assumes that everything is unpacked in the "src" dir of Xmipp itself
+            mkdir(self.srcdir)
+            self.cfg.update('unpack_options', '--directory %s' % os.path.basename(self.srcdir))
         super(EB_Xmipp, self).extract_step()
         for module in self.xmipp_modules:
-            symlink('%s-%s' % (module, self.version), os.path.join(self.srcdir, module), use_abspath_source=False)
+            if LooseVersion(self.version) >= LooseVersion('3.20.07') and module == 'xmipp':
+                pass
+            else:
+                symlink('%s-%s' % (module, self.version), os.path.join(self.srcdir, module), use_abspath_source=False)
 
     def patch_step(self):
         """Patch files from self.srcdir dir."""
-        super(EB_Xmipp, self).patch_step(beginpath=self.srcdir)
+        if LooseVersion(self.version) >= LooseVersion('3.20.07'):
+            super(EB_Xmipp, self).patch_step()
+        else:
+            super(EB_Xmipp, self).patch_step(beginpath=self.srcdir)
 
     def setup_xmipp_env(self):
         """Setup environment before running SCons."""
@@ -86,13 +107,18 @@ class EB_Xmipp(SCons):
         # Tell xmipp config that there is no Scipion.
         env.setvar('XMIPP_NOSCIPION', 'True')
         # Initialize the config file and then patch it with the correct values
+        if LooseVersion(self.version) >= LooseVersion('3.20.07'):
+            noask = 'noAsk'
+        else:
+            noask = ''
         cmd = ' '.join([
             self.cfg['preconfigopts'],
-            os.path.join(self.srcdir, 'xmipp', 'xmipp'),
+            self.xmipp_exe,
             'config',
+            noask,
             self.cfg['configopts'],
         ])
-        run_cmd(cmd, log_all=True, simple=True)
+        run_shell_cmd(cmd)
 
         # Parameters to be set in the config file
         params = {
@@ -105,6 +131,16 @@ class EB_Xmipp(SCons):
             'MPI_CXX': os.environ.get('MPICXX', 'UNKNOWN'),
             'MPI_LINKERFORPROGRAMS': os.environ.get('MPICXX', 'UNKNOWN'),
         }
+
+        if LooseVersion(self.version) >= LooseVersion('3.20.07'):
+            # Define include dirs with INCDIRFLAGS (Xmipp does not use CPPPATH directly)
+            incdirflags = os.getenv('INCDIRFLAGS', '')
+            incdirflags += '-I../ -I ' + ' -I'.join(os.environ['CPATH'].split(':'))
+            opencv_root = get_software_root('OpenCV')
+            if opencv_root:
+                incdirflags += ' -I' + opencv_root + '/include/opencv4'
+            # env.setvar('INCDIRFLAGS', incdirflags)
+            params['INCDIRFLAGS'] = incdirflags
 
         deps = [
             # Name of dependency, name of env var to set, required or not
@@ -120,10 +156,15 @@ class EB_Xmipp(SCons):
         if cuda_root:
             params.update({'CUDA_BIN': os.path.join(cuda_root, 'bin')})
             params.update({'CUDA_LIB': os.path.join(cuda_root, 'lib64')})
-            params.update({'NVCC': os.environ['CUDA_CXX']})
+            params.update({'NVCC': os.environ.get('CUDA_CXX', 'nvcc')})
             # Their default for NVCC is to use g++-5, fix that
-            nvcc_flags = '--x cu -D_FORCE_INLINES -Xcompiler -fPIC '
-            nvcc_flags = nvcc_flags + '-Wno-deprecated-gpu-targets -std=c++11'
+            nvcc_flags = '-v --x cu -D_FORCE_INLINES -Xcompiler -fPIC -Wno-deprecated-gpu-targets'
+            if LooseVersion(self.version) < LooseVersion('3.22'):
+                nvcc_flags += ' --std=c++11'
+            else:
+                nvcc_flags += ' --std=c++17'
+            if LooseVersion(self.version) >= LooseVersion('3.20.07'):
+                nvcc_flags += ' --extended-lambda'
             params.update({'NVCC_CXXFLAGS': nvcc_flags})
             self.use_cuda = True
 
@@ -134,6 +175,11 @@ class EB_Xmipp(SCons):
                 if len(matches) == 1:
                     cufft = os.path.basename(matches[0])
                     symlink(cufft, os.path.join(self.srcdir, 'cuFFTAdvisor'), use_abspath_source=False)
+                    if LooseVersion(self.version) >= LooseVersion('3.20.07'):
+                        symlink(
+                            os.path.join(self.srcdir, cufft),
+                            os.path.join(self.srcdir, 'xmipp', 'external', 'cuFFTAdvisor')
+                        )
                 else:
                     raise EasyBuildError("Failed to isolate path to cuFFTAdvisor-*: %s", matches)
 
@@ -197,7 +243,7 @@ class EB_Xmipp(SCons):
                 'all',
                 self.cfg['buildopts'],
             ])
-            run_cmd(cmd, log_all=True, simple=True)
+            run_shell_cmd(cmd)
             change_dir(cwd)
             xmipp_lib = os.path.join(self.srcdir, 'xmipp', 'lib')
             mkdir(xmipp_lib)
@@ -220,12 +266,12 @@ class EB_Xmipp(SCons):
         # to replicate here.
         cmd = ' '.join([
             self.cfg['preinstallopts'],
-            os.path.join(self.srcdir, 'xmipp', 'xmipp'),
+            self.xmipp_exe,
             'install',
             self.installdir,
             self.cfg['installopts'],
         ])
-        run_cmd(cmd, log_all=True, simple=True)
+        run_shell_cmd(cmd)
 
         # Remove the bash and fish files. Everything should be in the module
         remove_file(os.path.join(self.installdir, 'xmipp.bashrc'))
@@ -238,9 +284,13 @@ class EB_Xmipp(SCons):
 
         bins = ['xmipp_%s' % x for x in ['angular_rotate', 'classify_kerdensom', 'mpi_ml_refine3d']]
         libs = ['XmippCore', 'XmippJNI', 'XmippParallel', 'Xmipp']
+        cuda_root = get_software_root('CUDA')
+        if cuda_root:
+            libs.append('cuFFTAdvisor')
         custom_paths = {
             'files': [os.path.join('bin', x) for x in bins] +
             [os.path.join('bindings', 'python', 'xmippViz.py')] +
+            [os.path.join('bindings', 'java', 'lib', 'XmippJNI.jar')] +
             [os.path.join('lib', 'lib%s.%s') % (x, shlib_ext) for x in libs],
             'dirs': ['resources'],
         }
@@ -252,12 +302,3 @@ class EB_Xmipp(SCons):
         txt += self.module_generator.set_environment('XMIPP_HOME', self.installdir)
         self.log.debug("make_module_extra added this: %s", txt)
         return txt
-
-    def make_module_req_guess(self):
-        """Custom guesses for environment variables for Xmipp."""
-        guesses = super(EB_Xmipp, self).make_module_req_guess()
-        guesses.update({
-            'LD_LIBRARY_PATH': ['lib', os.path.join('bindings', 'python')],
-            'PYTHONPATH': [os.path.join('bindings', 'python'), 'pylib'],
-        })
-        return guesses

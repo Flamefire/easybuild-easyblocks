@@ -1,5 +1,5 @@
 ##
-# Copyright 2013-2021 Ghent University
+# Copyright 2013-2025 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -28,16 +28,18 @@ EasyBuild support for building and installing Qt, implemented as an easyblock
 @author: Kenneth Hoste (Ghent University)
 """
 import os
-from distutils.version import LooseVersion
+from easybuild.tools import LooseVersion
 
+import easybuild.tools.environment as env
 import easybuild.tools.toolchain as toolchain
 from easybuild.easyblocks.generic.configuremake import ConfigureMake
 from easybuild.framework.easyconfig import CUSTOM
 from easybuild.tools.build_log import EasyBuildError
 from easybuild.tools.filetools import apply_regex_substitutions
-from easybuild.tools.run import run_cmd_qa
+from easybuild.tools.modules import get_software_root
+from easybuild.tools.run import run_shell_cmd
 from easybuild.tools.systemtools import get_cpu_architecture, get_glibc_version, get_shared_lib_ext
-from easybuild.tools.systemtools import AARCH64, POWER
+from easybuild.tools.systemtools import AARCH64, POWER, RISCV64
 
 
 class EB_Qt(ConfigureMake):
@@ -49,6 +51,7 @@ class EB_Qt(ConfigureMake):
     def extra_options():
         extra_vars = {
             'check_qtwebengine': [False, "Make sure QtWebEngine components is installed", CUSTOM],
+            'disable_advanced_kernel_features': [False, "Disable features that require a kernel > 3.15", CUSTOM],
             'platform': [None, "Target platform to build for (e.g. linux-g++-64, linux-icc-64)", CUSTOM],
         }
         extra_vars = ConfigureMake.extra_options(extra_vars)
@@ -70,7 +73,7 @@ class EB_Qt(ConfigureMake):
         # if no platform is specified, try to derive it based on compiler in toolchain
         elif comp_fam in [toolchain.GCC]:  # @UndefinedVariable
             myarch = get_cpu_architecture()
-            if myarch == AARCH64:
+            if myarch in [AARCH64, RISCV64]:
                 platform = 'linux-g++'
             else:
                 platform = 'linux-g++-64'
@@ -129,16 +132,18 @@ class EB_Qt(ConfigureMake):
         # * https://github.com/NixOS/nixpkgs/commit/a7b6a9199e8db54a798d011a0946cdeb72cfc46b
         # * https://gitweb.gentoo.org/proj/qt.git/commit/?id=9ff0752e1ee3c28818197eaaca45545708035152
         kernel_version = os.uname()[2]
-        if LooseVersion(self.version) >= LooseVersion('5.10') and LooseVersion(kernel_version) < LooseVersion('3.17'):
+        skip_kernel_features = self.cfg['disable_advanced_kernel_features']
+        old_kernel_version = LooseVersion(kernel_version) < LooseVersion('3.17')
+        if LooseVersion(self.version) >= LooseVersion('5.10') and (skip_kernel_features or old_kernel_version):
             self.cfg.update('configopts', '-no-feature-renameat2')
             self.cfg.update('configopts', '-no-feature-getentropy')
 
         cmd = "%s ./configure -prefix %s %s" % (self.cfg['preconfigopts'], self.installdir, self.cfg['configopts'])
-        qa = {
-            "Type 'o' if you want to use the Open Source Edition.": 'o',
-            "Do you accept the terms of either license?": 'yes',
-            "Which edition of Qt do you want to use?": 'o',
-        }
+        qa = [
+            (r"Type 'o' if you want to use the Open Source Edition\.", 'o'),
+            (r"Do you accept the terms of either license\?", 'yes'),
+            (r"Which edition of Qt do you want to use\?", 'o'),
+        ]
         no_qa = [
             "for .*pro",
             r"%s.*" % os.getenv('CXX', '').replace('+', '\\+'),  # need to escape + in 'g++'
@@ -149,7 +154,14 @@ class EB_Qt(ConfigureMake):
             'Creating qmake...',
             'Checking for .*...',
         ]
-        run_cmd_qa(cmd, qa, no_qa=no_qa, log_all=True, simple=True, maxhits=120)
+        run_shell_cmd(cmd, qa_patterns=qa, qa_wait_patterns=no_qa, qa_timeout=120)
+
+        # Ninja uses all visible cores by default, which can lead to lack of sufficient memory;
+        # so $NINJAFLAGS is set to control number of parallel processes used by Ninja;
+        # note that $NINJAFLAGS is not a generic thing for Ninja, it's very specific to the Qt5 build procedure
+        if LooseVersion(self.version) >= LooseVersion('5'):
+            if get_software_root('Ninja'):
+                env.setvar('NINJAFLAGS', self.parallel_flag)
 
     def build_step(self):
         """Set $LD_LIBRARY_PATH before calling make, to ensure that all required libraries are found during linking."""

@@ -1,5 +1,5 @@
 ##
-# Copyright 2009-2021 Ghent University
+# Copyright 2009-2025 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -37,7 +37,7 @@ import glob
 import os
 import re
 import tempfile
-from distutils.version import LooseVersion
+from easybuild.tools import LooseVersion
 from os.path import expanduser
 
 import easybuild.tools.environment as env
@@ -46,7 +46,7 @@ from easybuild.easyblocks.generic.binary import Binary
 from easybuild.framework.easyconfig import CUSTOM
 from easybuild.tools.build_log import EasyBuildError
 from easybuild.tools.filetools import change_dir, mkdir, symlink, which
-from easybuild.tools.run import run_cmd
+from easybuild.tools.run import run_shell_cmd
 
 
 _log = fancylogger.getLogger('easyblocks.generic.rpm')
@@ -88,12 +88,13 @@ def rebuild_rpm(rpm_path, targetdir):
         targetdir,
         rpm_path,
     ])
-    run_cmd(cmd, log_all=True, simple=True)
+    run_shell_cmd(cmd)
 
 
 class Rpm(Binary):
     """
     Support for installing RPM files.
+
     - sources is a list of rpms
     - installation is with --nodeps (so the sources list has to be complete)
     """
@@ -103,6 +104,11 @@ class Rpm(Binary):
         super(Rpm, self).__init__(*args, **kwargs)
 
         self.rebuild_rpm = False
+
+        # Add common PATH/LD_LIBRARY_PATH paths found in RPMs to module load environment
+        self.module_load_environment.PATH = [os.path.join('usr', 'bin'), 'sbin', os.path.join('usr', 'sbin')]
+        self.module_load_environment.LD_LIBRARY_PATH = [os.path.join('usr', 'lib'), os.path.join('usr', 'lib64')]
+        self.module_load_environment.MANPATH = [os.path.join('usr', 'share', 'man')]
 
     @staticmethod
     def extra_options(extra_vars=None):
@@ -116,6 +122,22 @@ class Rpm(Binary):
         })
         return extra_vars
 
+    def extract_step(self):
+        """
+        Extract sources if requested, retain resulting list of RPMs as new list of sources.
+        """
+        super(Rpm, self).extract_step()
+
+        if self.cfg.get('extract_sources', False):
+            self.src = []
+            for src_rpm in sorted(glob.glob(os.path.join(self.builddir, '*.rpm'))):
+                self.src.append({
+                    'name': os.path.basename(src_rpm),
+                    'path': src_rpm,
+                    'finalpath': self.builddir,
+                })
+            self.log.info("New list of sources after unpacking: %s", self.src)
+
     def configure_step(self):
         """Custom configuration procedure for RPMs: rebuild RPMs for relocation if required."""
 
@@ -125,10 +147,10 @@ class Rpm(Binary):
 
         # determine whether RPMs need to be rebuilt to make relocation work
         cmd = "rpm --version"
-        (out, _) = run_cmd(cmd, log_all=True, simple=False)
+        res = run_shell_cmd(cmd)
 
         rpmver_re = re.compile(r"^RPM\s+version\s+(?P<version>[0-9.]+).*")
-        res = rpmver_re.match(out)
+        res = rpmver_re.match(res.output)
         self.log.debug("RPM version found: %s" % res.group())
 
         if res:
@@ -168,7 +190,7 @@ class Rpm(Binary):
 
         cmd = "rpm --initdb --dbpath /rpm --root %s" % self.installdir
 
-        run_cmd(cmd, log_all=True, simple=True)
+        run_shell_cmd(cmd)
 
         force = ''
         if self.cfg['force']:
@@ -182,11 +204,11 @@ class Rpm(Binary):
             preinstall = ''
 
         if self.rebuild_rpm:
-            cmd_tpl = "rpm -i --dbpath %(inst)s/rpm %(force)s --relocate /=%(inst)s " \
-                      "%(pre)s %(post)s --nodeps --ignorearch %(rpm)s"
+            cmd_tpl = "%(preinstallopts)s rpm -i --dbpath %(inst)s/rpm %(force)s --relocate /=%(inst)s " \
+                      "%(pre)s %(post)s --nodeps --ignorearch %(rpm)s %(installopts)s"
         else:
-            cmd_tpl = "rpm -i --dbpath /rpm %(force)s --root %(inst)s --relocate /=%(inst)s " \
-                      "%(pre)s %(post)s --nodeps %(rpm)s"
+            cmd_tpl = "%(preinstallopts)s rpm -i --dbpath /rpm %(force)s --root %(inst)s --relocate /=%(inst)s " \
+                      "%(pre)s %(post)s --nodeps %(rpm)s %(installopts)s"
 
         # exception for user root:
         # --relocate is not necessary -> --root will relocate more than enough
@@ -194,13 +216,15 @@ class Rpm(Binary):
 
         for rpm in self.src:
             cmd = cmd_tpl % {
+                'preinstallopts': self.cfg['preinstallopts'],
                 'inst': self.installdir,
                 'rpm': rpm['path'],
                 'force': force,
                 'pre': preinstall,
                 'post': postinstall,
+                'installopts': self.cfg['installopts'],
             }
-            run_cmd(cmd, log_all=True, simple=True)
+            run_shell_cmd(cmd)
 
         for path in self.cfg['makesymlinks']:
             # allow globs, always use first hit.
@@ -213,16 +237,3 @@ class Rpm(Binary):
                 symlink(realdirs[0], os.path.join(self.installdir, os.path.basename(path)))
             else:
                 self.log.debug("No match found for symlink glob %s." % path)
-
-    def make_module_req_guess(self):
-        """Add common PATH/LD_LIBRARY_PATH paths found in RPMs to list of guesses."""
-
-        guesses = super(Rpm, self).make_module_req_guess()
-
-        guesses.update({
-            'PATH': guesses.get('PATH', []) + ['usr/bin', 'sbin', 'usr/sbin'],
-            'LD_LIBRARY_PATH': guesses.get('LD_LIBRARY_PATH', []) + ['usr/lib', 'usr/lib64'],
-            'MANPATH': guesses.get('MANPATH', []) + ['usr/share/man'],
-        })
-
-        return guesses

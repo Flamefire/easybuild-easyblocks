@@ -1,5 +1,5 @@
 ##
-# Copyright 2017-2019 Ghent University
+# Copyright 2017-2025 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -27,10 +27,10 @@ EasyBuild support for building and installing cryptography, implemented as an ea
 
 @author: Alexander Grund
 """
-from distutils.version import LooseVersion
+from easybuild.tools import LooseVersion
 
 from easybuild.easyblocks.generic.pythonpackage import PythonPackage
-from easybuild.tools.run import run_cmd
+from easybuild.tools.run import run_shell_cmd
 
 
 class EB_cryptography(PythonPackage):
@@ -44,8 +44,12 @@ class EB_cryptography(PythonPackage):
         # which causes 'undefined symbol: pthread_atfork'
         # see https://github.com/easybuilders/easybuild-easyconfigs/issues/9446
         # and upstream: https://github.com/pyca/cryptography/issues/5084
+        self.cfg['prebuildopts'] += 'CFLAGS="$CFLAGS -pthread"'
         self.cfg['preinstallopts'] += 'CFLAGS="$CFLAGS -pthread"'
-        self.log.info("Adding -pthread to preinstallopts of cryptography. Final value: %s", self.cfg['preinstallopts'])
+        self.log.info("Adding -pthread to prebuildopts & preinstallopts of cryptography.\n" +
+                      "Final values: prebuildopts=%s and preinstallopts=%s",
+                      self.cfg['prebuildopts'],
+                      self.cfg['preinstallopts'])
 
     def sanity_check_step(self, *args, **kwargs):
         """Custom sanity check"""
@@ -53,5 +57,5 @@ class EB_cryptography(PythonPackage):
         if success:
             # Check module added in v0.7 leading to issue #9446 (see above)
             if LooseVersion(self.version) >= LooseVersion("0.7"):
-                run_cmd("python -c 'from cryptography.hazmat.bindings.openssl import binding'")
+                run_shell_cmd("python -c 'from cryptography.hazmat.bindings.openssl import binding'")
         return success, fail_msg

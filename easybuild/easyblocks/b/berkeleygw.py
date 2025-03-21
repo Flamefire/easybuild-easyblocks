@@ -1,5 +1,5 @@
 ##
-# Copyright 2009-2021 Ghent University
+# Copyright 2009-2025 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -28,7 +28,7 @@ EasyBuild support for BerkeleyGW, implemented as an easyblock
 @author: Miguel Dias Costa (National University of Singapore)
 """
 import os
-from distutils.version import LooseVersion
+from easybuild.tools import LooseVersion
 
 import easybuild.tools.toolchain as toolchain
 from easybuild.easyblocks.generic.configuremake import ConfigureMake
@@ -62,7 +62,7 @@ class EB_BerkeleyGW(ConfigureMake):
     def build_step(self):
         """Custom build step for BerkeleyGW."""
 
-        self.cfg['parallel'] = 1
+        self.cfg.parallel = 1
 
         self.cfg['buildopts'] = 'all-flavors'
 
@@ -132,7 +132,7 @@ class EB_BerkeleyGW(ConfigureMake):
 
         mkl = get_software_root('imkl')
         if mkl:
-            self.cfg.update('buildopts', 'MKLPATH="%s"' % mkl)
+            self.cfg.update('buildopts', 'MKLPATH="%s"' % os.getenv('MKLROOT'))
 
         fftw = get_software_root('FFTW')
         if mkl or fftw:
@@ -177,7 +177,9 @@ class EB_BerkeleyGW(ConfigureMake):
         """Custom test step for BerkeleyGW."""
         if self.cfg['runtest'] is not False:
             self.cfg['runtest'] = 'check'
-            setvar('OMP_NUM_THREADS', '4')
+            setvar('BGW_TEST_MPI_NPROCS', '2')
+            setvar('OMP_NUM_THREADS', '2')
+            setvar('TEMPDIRPATH', os.path.join(self.builddir, 'tmp'))
         super(EB_BerkeleyGW, self).test_step()
 
     def sanity_check_step(self):

@@ -1,5 +1,5 @@
 ##
-# Copyright 2009-2021 Ghent University
+# Copyright 2009-2025 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -30,13 +30,13 @@ EasyBuild support for building and installing Hadoop, implemented as an easybloc
 import glob
 import os
 import re
-import shutil
 
 from easybuild.easyblocks.generic.tarball import Tarball
 from easybuild.framework.easyconfig import CUSTOM
 from easybuild.tools.build_log import EasyBuildError
+from easybuild.tools.filetools import copy_file
 from easybuild.tools.modules import get_software_root
-from easybuild.tools.run import run_cmd
+from easybuild.tools.run import run_shell_cmd
 from easybuild.tools.systemtools import get_shared_lib_ext
 
 
@@ -64,9 +64,9 @@ class EB_Hadoop(Tarball):
                     raise EasyBuildError("%s not found. Failing install" % native_lib)
                 cmd += ' -Drequire.%s=true -D%s.prefix=%s' % (native_lib, native_lib, lib_root)
 
-            if self.cfg['parallel'] > 1:
-                cmd += " -T%d" % self.cfg['parallel']
-            run_cmd(cmd, log_all=True, simple=True, log_ok=True)
+            if self.cfg.parallel > 1:
+                cmd += f" -T{self.cfg.parallel}"
+            run_shell_cmd(cmd)
 
     def install_step(self):
         """Custom install procedure for Hadoop: install-by-copy."""
@@ -76,16 +76,24 @@ class EB_Hadoop(Tarball):
         else:
             super(EB_Hadoop, self).install_step()
 
-    def post_install_step(self):
+    def post_processing_step(self):
         """After the install, copy the extra native libraries into place."""
         for native_library, lib_path in self.cfg['extra_native_libs']:
             lib_root = get_software_root(native_library)
             lib_src = os.path.join(lib_root, lib_path)
             lib_dest = os.path.join(self.installdir, 'lib', 'native')
             self.log.info('Copying shared objects in "%s"', lib_src)
+            copied_libs = []
             for lib in glob.glob(lib_src):
-                self.log.info('Copying "%s" to "%s"', lib, lib_dest)
-                shutil.copy2(lib, lib_dest)
+                lib_fn = os.path.basename(lib)
+                # avoid copying the same file again, which may cause problems due to read-only permissions of target
+                # this could happen when 'lib' is a symlink to 'lib64', which leads to duplicates in the glob result
+                if lib_fn in copied_libs:
+                    self.log.info("Not copying '%s' to '%s', this file was already copied", lib, lib_dest)
+                else:
+                    self.log.info("Copying '%s' to '%s'", lib, lib_dest)
+                    copy_file(lib, lib_dest)
+                    copied_libs.append(lib_fn)
 
     def sanity_check_step(self):
         """Custom sanity check for Hadoop."""
@@ -103,14 +111,14 @@ class EB_Hadoop(Tarball):
         fake_mod_data = self.load_fake_module(purge=True)
         # exit code is ignored, since this cmd exits with 1 if not all native libraries were found
         cmd = "hadoop checknative -a"
-        out, _ = run_cmd(cmd, simple=False, log_all=False, log_ok=False)
+        res = run_shell_cmd(cmd, fail_on_error=False)
         self.clean_up_fake_module(fake_mod_data)
 
         not_found = []
         installdir = os.path.realpath(self.installdir)
         lib_src = os.path.join(installdir, 'lib', 'native')
         for native_lib, _ in self.cfg['extra_native_libs']:
-            if not re.search(r'%s: *true *%s' % (native_lib, lib_src), out):
+            if not re.search(r'%s: *true *%s' % (native_lib, lib_src), res.output):
                 not_found.append(native_lib)
         if not_found:
             raise EasyBuildError("%s not found by 'hadoop checknative -a'.", ', '.join(not_found))

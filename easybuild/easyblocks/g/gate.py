@@ -1,5 +1,5 @@
 ##
-# Copyright 2009-2021 Ghent University
+# Copyright 2009-2025 Ghent University
 #
 # This file is part of EasyBuild,
 # originally created by the HPC team of Ghent University (http://ugent.be/hpc/en),
@@ -34,13 +34,13 @@ EasyBuild support for building and installing Gate, implemented as an easyblock
 """
 import os
 import shutil
-from distutils.version import LooseVersion
+from easybuild.tools import LooseVersion
 
 import easybuild.tools.toolchain as toolchain
 from easybuild.easyblocks.generic.cmakemake import CMakeMake
 from easybuild.framework.easyconfig import CUSTOM
 from easybuild.tools.build_log import EasyBuildError
-from easybuild.tools.run import run_cmd
+from easybuild.tools.run import run_shell_cmd
 from easybuild.tools.systemtools import get_shared_lib_ext
 
 
@@ -88,7 +88,7 @@ class EB_GATE(CMakeMake):
 
         # redefine $CFLAGS/$CXXFLAGS via options to build command ('make')
         cflags = os.getenv('CFLAGS')
-        cxxflags = "%s -DGC_DEFAULT_PLATFORM=\\'%s\\'" % (os.getenv('CXXFLAGS'), self.cfg['default_platform'])
+        cxxflags = "%s -DGC_DEFAULT_PLATFORM='\\\"%s\\\"'" % (os.getenv('CXXFLAGS'), self.cfg['default_platform'])
         if self.toolchain.comp_family() in [toolchain.INTELCOMP]:
             # make sure GNU macros are defined by Intel compiler
             cflags += " -gcc"
@@ -144,8 +144,8 @@ class EB_GATE(CMakeMake):
                 raise EasyBuildError("Failed to copy %s to %s: %s", self.cfg['start_dir'], self.installdir, err)
 
             cmd = "source %s &> /dev/null && echo $G4SYSTEM" % os.path.join(self.cfg['start_dir'], 'env_gate.sh')
-            out, _ = run_cmd(cmd, simple=False)
-            self.g4system = out.strip()
+            res = run_shell_cmd(cmd)
+            self.g4system = res.output.strip()
             if self.g4system:
                 self.log.debug("Value obtained for $G4SYSTEM: %s" % self.g4system)
             else:
@@ -214,4 +214,6 @@ class EB_GATE(CMakeMake):
             'files': [os.path.join('bin', subdir, 'Gate')] + extra_files,
             'dirs': dirs,
         }
-        super(EB_GATE, self).sanity_check_step(custom_paths=custom_paths)
+        custom_commands = ["gjs -h | grep 'This executable is compiled with %s as default'"
+                           % self.cfg['default_platform']]
+        super(EB_GATE, self).sanity_check_step(custom_paths=custom_paths, custom_commands=custom_commands)
