@@ -34,9 +34,11 @@ import tempfile
 from easybuild.easyblocks.generic.pythonpackage import PythonPackage
 from easybuild.framework.easyconfig import CUSTOM
 from easybuild.tools.build_log import EasyBuildError, print_warning
+from easybuild.tools.config import ERROR
 from easybuild.tools.filetools import apply_regex_substitutions
 from easybuild.tools.modules import get_software_root
 import easybuild.tools.environment as env
+
 
 class EB_DeepSpeed(PythonPackage):
     """Custom easyblock for DeepSpeed"""
@@ -88,6 +90,9 @@ class EB_DeepSpeed(PythonPackage):
 
         env.setvar('MAX_JOBS', str(self.cfg.parallel))
         self.set_triton_dirs()
+        # Make sure the installed package is used instead of the source package when running tests
+        apply_regex_substitutions('tests/conftest.py', [(r'sys\.path\.insert\(.*git_repo_path\)', '')],
+                                  on_missing_match=ERROR)
         super().configure_step()
 
     def test_step(self):
