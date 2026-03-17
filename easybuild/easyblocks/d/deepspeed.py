@@ -33,10 +33,10 @@ import tempfile
 
 from easybuild.easyblocks.generic.pythonpackage import PythonPackage
 from easybuild.framework.easyconfig import CUSTOM
-from easybuild.tools.build_log import EasyBuildError
+from easybuild.tools.build_log import EasyBuildError, print_warning
+from easybuild.tools.filetools import apply_regex_substitutions
 from easybuild.tools.modules import get_software_root
 import easybuild.tools.environment as env
-
 
 class EB_DeepSpeed(PythonPackage):
     """Custom easyblock for DeepSpeed"""
@@ -52,7 +52,7 @@ class EB_DeepSpeed(PythonPackage):
                                    "which might cause reduced performance on newer GPUs.", CUSTOM],
         })
 
-    def set_cache_dirs(self):
+    def set_triton_dirs(self):
         # Don't write to $HOME
         triton_dir = tempfile.mkdtemp(suffix='-tt_home')
         env.setvar('TRITON_HOME', triton_dir)
@@ -87,12 +87,48 @@ class EB_DeepSpeed(PythonPackage):
             env.setvar('DS_BUILD_{}'.format(opt), '0')
 
         env.setvar('MAX_JOBS', str(self.cfg.parallel))
-        self.set_cache_dirs()
+        self.set_triton_dirs()
         super().configure_step()
 
+    def test_step(self):
+        """Adjust variables for tests"""
+        self.set_triton_dirs()
+        # List gathered from .github/workflows/setup-venv/action.yml
+        test_vars = (
+            'TEST_DATA_DIR',
+            'HF_HOME',
+            'TORCH_EXTENSIONS_DIR',
+            'TORCH_CACHE',
+            'HF_DATASETS_CACHE',
+            'RITIC_CKPT_DIR',
+        )
+        base_dir = tempfile.mkdtemp(suffix='-testArtifacts', dir=self.builddir)
+        for var in test_vars:
+            path = os.path.join(base_dir, var.lower())
+            env.setvar(var, path)
+        test_opts = self.cfg['testopts']
+        parallel = self.cfg.parallel
+        python_pkgs = self.get_installed_python_packages(names_only=True)
+        if parallel > 1:
+            if 'pytest-xdist' not in python_pkgs:
+                print_warning("Python package 'pytest-xdist' not found, not running tests in paralell", log=self.log)
+            else:
+                if '-n ' not in test_opts:
+                    test_parallel = min(4, parallel - 1)
+                    if test_parallel > 1:
+                        test_opts += f' -n {test_parallel}'
+                        parallel -= test_parallel
+        if 'pytest-forked' in python_pkgs:
+            test_opts += ' --forked'
+        else:
+            print_warning("The Python package 'pytest-forked' should be used for testing", log=self.log)
+        self.cfg['testopts'] = test_opts
+        env.setvar('MAX_JOBS', str(parallel))
+        super().test_step()
+
     def sanity_check_step(self):
-        '''Custom sanity check for DeepSpeed.'''
-        self.set_cache_dirs()
+        """Custom sanity check for DeepSpeed."""
+        self.set_triton_dirs()
         custom_paths = {
             'files': ['bin/deepspeed'],
             'dirs': [],
