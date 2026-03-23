@@ -123,10 +123,6 @@ class EB_DeepSpeed(PythonPackage):
                     if test_parallel > 1:
                         test_opts += f' -n {test_parallel}'
                         parallel -= test_parallel
-        if 'pytest-forked' in python_pkgs:
-            test_opts += ' --forked'
-        else:
-            print_warning("The Python package 'pytest-forked' should be used for testing", log=self.log)
         self.cfg['testopts'] = test_opts
         env.setvar('MAX_JOBS', str(parallel))
         super().test_step()
