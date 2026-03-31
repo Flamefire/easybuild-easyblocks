@@ -119,10 +119,10 @@ class EB_DeepSpeed(PythonPackage):
                 print_warning("Python package 'pytest-xdist' not found, not running tests in paralell", log=self.log)
             else:
                 if '-n ' not in test_opts:
-                    test_parallel = min(4, parallel - 1)
-                    if test_parallel > 1:
-                        test_opts += f' -n {test_parallel}'
-                        parallel -= test_parallel
+                    parallel_tests = min(4, parallel - 1)
+                    if parallel_tests > 1:
+                        test_opts += f' -n {parallel_tests}'
+                        parallel = max(1, parallel // parallel_tests)
         self.cfg['testopts'] = test_opts
         env.setvar('MAX_JOBS', str(parallel))
         super().test_step()
