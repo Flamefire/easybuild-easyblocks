@@ -122,7 +122,14 @@ class JuliaPackage(ExtensionEasyBlock):
     def __init__(self, *args, **kwargs):
         """Initialize JuliaPackage easyblock."""
         super().__init__(*args, **kwargs)
-        self.tmp_depot_path = tempfile.mkdtemp(suffix='-julia_depot')
+        self._tmp_depot_path = None
+
+    @property
+    def tmp_depot_path(self):
+        """Temporary path to be used as top DEPOT_PATH during module load."""
+        if not self._tmp_depot_path:
+            self._tmp_depot_path = tempfile.mkdtemp(suffix='-julia_depot')
+        return self._tmp_depot_path
 
     def julia_env_path(self, absolute=True, base=True):
         """
