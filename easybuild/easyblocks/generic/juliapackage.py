@@ -272,6 +272,7 @@ class JuliaPackage(ExtensionEasyBlock):
     def prepare_step(self, *args, **kwargs):
         """Prepare for Julia package installation."""
         super().prepare_step(*args, **kwargs)
+        print("Julia prepare")
 
         if get_software_root('Julia') is None:
             raise EasyBuildError("Julia not included as dependency!")
@@ -321,11 +322,9 @@ class JuliaPackage(ExtensionEasyBlock):
     def sanity_check_step(self, *args, **kwargs):
         """Custom sanity check for JuliaPackage"""
 
-        pkg_dir = os.path.join('packages', self.name)
-
         custom_paths = {
             'files': [],
-            'dirs': [pkg_dir],
+            'dirs': [os.path.join('packages', self.name)],
         }
         kwargs.setdefault('custom_paths', custom_paths)
 
