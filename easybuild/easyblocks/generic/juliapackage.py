@@ -31,6 +31,7 @@ import ast
 import glob
 import os
 import re
+import tempfile
 
 from easybuild.tools import LooseVersion
 
@@ -117,6 +118,11 @@ class JuliaPackage(ExtensionEasyBlock):
             raise EasyBuildError("Failed to parse %s from julia shell: %s", env_var, res.output)
 
         return parsed_var
+
+    def __init__(self, *args, **kwargs):
+        """Initialize JuliaPackage easyblock."""
+        super().__init__(*args, **kwargs)
+        self.tmp_depot_path = tempfile.mkdtemp(suffix='-julia_depot')
 
     def julia_env_path(self, absolute=True, base=True):
         """
@@ -294,6 +300,32 @@ class JuliaPackage(ExtensionEasyBlock):
         self.prepare_julia_env()
         self.install_pkg()
 
+    def fixup_sanity_check_commands(self):
+        """Set $JULIA_DEPOT_PATH for sanity check commands that run julia"""
+        with self.cfg.disable_templating():
+            # If the sanity check commands run a julia command we
+            JULIA_CMD = 'julia -e'
+            def need_fixup(cmd):
+                return JULIA_CMD in cmd and 'JULIA_DEPOT_PATH' not in cmd
+            cmds = self.cfg['sanity_check_commands']
+            if any(need_fixup(cmd) for cmd in cmds):
+                tmp_julia_depot = tempfile.mkdtemp(suffix='-julia_depot')
+                export = f'export JULIA_DEPOT_PATH="{tmp_julia_depot}$JULIA_DEPOT_PATH:"'
+                cmds = [f'{export} && {cmd}' if need_fixup(cmd) else cmd for cmd in cmds]
+                self.cfg['sanity_check_commands'] = cmds
+                self.log.info("Updated sanity check commands with temporary JULIA_DEPOT_PATH: %s", tmp_julia_depot)
+
+    def load_module(self, *args, **kwargs):
+        """Set JULIA_DEPOT_PATH to a temporary directory and exclude the users depot path to avoid writing to $HOME
+
+        Required for e.g. sanity checks that run a julia command.
+        """
+        super().load_module(*args, **kwargs)
+
+        depot_path = os.environ['JULIA_DEPOT_PATH'].strip(':')  # Always set by module
+        # Append a colon at the end to exclude the users depot path (in $HOME)
+        env.setvar('JULIA_DEPOT_PATH', f"{self.tmp_depot_path}:{depot_path}:")
+
     def sanity_check_step(self, *args, **kwargs):
         """Custom sanity check for JuliaPackage"""
 
@@ -303,9 +335,9 @@ class JuliaPackage(ExtensionEasyBlock):
             'files': [],
             'dirs': [pkg_dir],
         }
-        kwargs.update({'custom_paths': custom_paths})
+        kwargs.setdefault('custom_paths', custom_paths)
 
-        return ExtensionEasyBlock.sanity_check_step(self, EXTS_FILTER_JULIA_PACKAGES, *args, **kwargs)
+        return super().sanity_check_step(EXTS_FILTER_JULIA_PACKAGES, *args, **kwargs)
 
     def make_module_extra(self, *args, **kwargs):
         """
