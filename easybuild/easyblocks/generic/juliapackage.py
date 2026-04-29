@@ -330,6 +330,7 @@ class JuliaPackage(ExtensionEasyBlock):
             depot_path, _ = self.determine_clean_paths()
         # Prepend a temporary directory so the install path is not affected by sanity checks
         env.setvar('JULIA_DEPOT_PATH', f"{self.tmp_depot_path}:{depot_path}")
+        self.set_pkg_offline()
 
     def sanity_check_step(self, *args, **kwargs):
         """Custom sanity check for JuliaPackage"""
