@@ -32,6 +32,7 @@ import glob
 import os
 import re
 import tempfile
+from typing import List, Tuple
 
 from easybuild.tools import LooseVersion
 
@@ -163,7 +164,7 @@ class JuliaPackage(ExtensionEasyBlock):
                 )
                 raise EasyBuildError(errmsg, julia_version)
 
-    def determine_clean_paths(self):
+    def determine_clean_paths(self) -> Tuple[List[str], List[str]]:
         """Determine cleaned DEPOT_PATH and LOAD_PATH excluding user depot paths."""
         # Grab both DEPOT_PATH and LOAD_PATH before any changes are made
         # given that Julia might automatically update LOAD_PATH from a change on DEPOT_PATH
@@ -327,7 +328,7 @@ class JuliaPackage(ExtensionEasyBlock):
         else:
             # In older Julia versions the trailing colon doesn't prevent the user $HOME being added
             # So use the extra logic to avoid that, see https://github.com/easybuilders/easybuild-easyblocks/pull/4102
-            depot_path, _ = self.determine_clean_paths()
+            depot_path = os.pathsep.join(self.determine_clean_paths()[0])
         # Prepend a temporary directory so the install path is not affected by sanity checks
         env.setvar('JULIA_DEPOT_PATH', f"{self.tmp_depot_path}:{depot_path}")
         self.set_pkg_offline()
@@ -340,7 +341,6 @@ class JuliaPackage(ExtensionEasyBlock):
             'dirs': [os.path.join('packages', self.name)],
         }
         kwargs.setdefault('custom_paths', custom_paths)
-
         return super().sanity_check_step(EXTS_FILTER_JULIA_PACKAGES, *args, **kwargs)
 
     def make_module_extra(self, *args, **kwargs):
