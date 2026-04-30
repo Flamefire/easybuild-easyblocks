@@ -164,7 +164,7 @@ class JuliaPackage(ExtensionEasyBlock):
                 )
                 raise EasyBuildError(errmsg, julia_version)
 
-    def determine_clean_paths(self) -> Tuple[List[str], List[str]]:
+    def determine_clean_paths(self, keep_installdir=False) -> Tuple[List[str], List[str]]:
         """Determine cleaned DEPOT_PATH and LOAD_PATH excluding user depot paths."""
         # Grab both DEPOT_PATH and LOAD_PATH before any changes are made
         # given that Julia might automatically update LOAD_PATH from a change on DEPOT_PATH
@@ -174,7 +174,7 @@ class JuliaPackage(ExtensionEasyBlock):
         self.log.debug('LOAD_PATH read from Julia environment: %s', os.pathsep.join(dirty_load))
 
         clean_depot = [path for path in dirty_depot
-                       if not USER_DEPOT_PATTERN.search(path) and path != self.installdir]
+                       if not USER_DEPOT_PATTERN.search(path) and (keep_installdir or path != self.installdir)]
 
         project_toml = self.julia_env_path(base=False)
         clean_load = [path for path in dirty_load if not USER_DEPOT_PATTERN.search(path) and path != project_toml]
@@ -328,7 +328,7 @@ class JuliaPackage(ExtensionEasyBlock):
         else:
             # In older Julia versions the trailing colon doesn't prevent the user $HOME being added
             # So use the extra logic to avoid that, see https://github.com/easybuilders/easybuild-easyblocks/pull/4102
-            depot_path = os.pathsep.join(self.determine_clean_paths()[0])
+            depot_path = os.pathsep.join(self.determine_clean_paths(keep_installdir=True)[0])
         # Prepend a temporary directory so the install path is not affected by sanity checks
         env.setvar('JULIA_DEPOT_PATH', f"{self.tmp_depot_path}:{depot_path}")
         self.set_pkg_offline()
