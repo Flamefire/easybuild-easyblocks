@@ -316,6 +316,8 @@ class JuliaPackage(ExtensionEasyBlock):
 
     def load_module(self, *args, **kwargs):
         """Set JULIA_DEPOT_PATH excluding the users depot path to avoid writing to $HOME
+        Also prepend a temporary directory to JULIA_DEPOT_PATH so that sanity check operations
+        do not write to the installdir DEPOT_PATH
 
         Required for e.g. sanity checks that run a julia command.
         """
