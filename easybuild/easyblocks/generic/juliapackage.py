@@ -31,6 +31,7 @@ import ast
 import glob
 import os
 import re
+import tempfile
 
 from easybuild.tools import LooseVersion
 
@@ -272,8 +273,47 @@ class JuliaPackage(ExtensionEasyBlock):
         pass
 
     def test_step(self):
-        """No separate (standard) test procedure for JuliaPackage."""
-        pass
+        """
+        Test the built Julia package.
+
+        :param return_output: return output and exit code of test command
+        """
+        testcmd = None
+        if isinstance(self.cfg['runtest'], str):
+            testcmd = self.cfg['runtest']
+
+        if self.cfg['runtest']:
+            if testcmd is None:
+                testcmd = f"julia -e 'using Pkg; Pkg.test(\"{self.name}\")'"
+
+            try:
+                tmpdir = tempfile.mkdtemp()
+            except OSError as err:
+                raise EasyBuildError("Failed to create test install dir: %s", err)
+
+            depot_path = self.get_julia_env("DEPOT_PATH")
+            load_path = self.get_julia_env("LOAD_PATH")
+            self.log.info("Original DEPOT_PATH for testing: %s", os.pathsep.join(depot_path))
+            self.log.info("Original LOAD_PATH for testing: %s", os.pathsep.join(load_path))
+
+            depot_path = os.pathsep.join([tmpdir] + depot_path)
+
+            extrapath = " && ".join([
+                f"export JULIA_DEPOT_PATH=\"{depot_path}\"",
+                # Ensure TEST dependencies can be downloaded
+                # The alternative is to install them as normal dependencies of the package
+                "export JULIA_PKG_OFFLINE=false",
+                ""
+            ])
+
+            cmd = ' '.join([
+                extrapath,
+                self.cfg['pretestopts'],
+                testcmd,
+                self.cfg['testopts'],
+            ])
+
+            run_shell_cmd(cmd)
 
     def install_step(self):
         """Prepare installation environment and install Julia package."""
@@ -293,6 +333,7 @@ class JuliaPackage(ExtensionEasyBlock):
 
         self.prepare_julia_env()
         self.install_pkg()
+        self._test_step()
 
     def sanity_check_step(self, *args, **kwargs):
         """Custom sanity check for JuliaPackage"""
