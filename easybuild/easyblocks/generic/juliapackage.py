@@ -177,7 +177,8 @@ class JuliaPackage(ExtensionEasyBlock):
                        if not USER_DEPOT_PATTERN.search(path) and (keep_installdir or path != self.installdir)]
 
         project_toml = self.julia_env_path(base=False)
-        clean_load = [path for path in dirty_load if not USER_DEPOT_PATTERN.search(path) and path != project_toml]
+        clean_load = [path for path in dirty_load
+                      if not USER_DEPOT_PATTERN.search(path) and (keep_installdir or path != project_toml)]
 
         return clean_depot, clean_load
 
