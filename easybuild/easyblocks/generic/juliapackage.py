@@ -44,7 +44,18 @@ from easybuild.tools.run import run_shell_cmd
 from easybuild.tools.utilities import trace_msg
 from easybuild.tools import tomllib
 
-EXTS_FILTER_JULIA_PACKAGES = ("julia -e 'using %(ext_name)s'", "")
+_COMPILECACHE_CHECK = ' | '.join([
+    "julia -E 'Base.compilecache_path(Base.identify_package(\"%(ext_name)s\"))'",
+    "grep '%(ext_name)s'"
+])
+
+EXTS_FILTER_JULIA_PACKAGES = (
+    " && ".join([
+        _COMPILECACHE_CHECK,
+        "julia -e 'using %(ext_name)s'",
+    ]),
+    ""
+)
 USER_DEPOT_PATTERN = re.compile(r"\/\.julia\/?(.*\.toml)*$")
 
 JULIA_PATHS_SOFT_INIT = {
@@ -58,7 +69,35 @@ end
 if { [ module-info mode load ] } {
     if {![info exists env(JULIA_DEPOT_PATH)]} { setenv JULIA_DEPOT_PATH : }
     if {![info exists env(JULIA_LOAD_PATH)]} { setenv JULIA_LOAD_PATH : }
+""",
 }
+
+JULIA_MODULE_FOOTER = {
+    "Lua": """
+setenv("JULIA_DEPOT_PATH", ":" .. os.getenv("EBJULIA_DEPOT_PATH") )
+setenv("JULIA_LOAD_PATH", os.getenv("EBJULIA_LOAD_PATH") .. ":")
+""",
+#     "Lua": """
+# if ( mode() == "load" ) then
+#     setenv("JULIA_DEPOT_PATH", ":" .. os.getenv("EBJULIA_DEPOT_PATH") )
+#     setenv("JULIA_LOAD_PATH", os.getenv("EBJULIA_LOAD_PATH") .. ":")
+# end
+# if (mode() == "unload") then
+#     if (os.getenv("JULIA_DEPOT_PATH") == nil) then
+#         setenv("JULIA_DEPOT_PATH", "")
+#     else
+#         setenv("JULIA_DEPOT_PATH", ":" .. os.getenv("EBJULIA_DEPOT_PATH") )
+#         setenv("JULIA_LOAD_PATH", os.getenv("EBJULIA_LOAD_PATH") .. ":")
+#     end
+# end
+# """,
+    "Lua": """
+execute{cmd="export JULIA_DEPOT_PATH=:${EBJULIA_DEPOT_PATH}", modeA={"load", "unload"}}
+execute{cmd="export JULIA_LOAD_PATH=${EBJULIA_LOAD_PATH}:", modeA={"load", "unload"}}
+""",
+    "Tcl": """
+setenv JULIA_DEPOT_PATH [file join $env(:) $env(EBJULIA_DEPOT_PATH)]
+setenv JULIA_LOAD_PATH [file join $env(EBJULIA_LOAD_PATH) :]
 """,
 }
 
@@ -104,6 +143,10 @@ class JuliaPackage(ExtensionEasyBlock):
                 "will take care of installing dependencies.",
                 CUSTOM
             ],
+            'test_online': [
+                False, "Allow online tests that require downloading dependencies. By default, tests are run in offline mode.",
+                CUSTOM
+            ],
         })
         return extra_vars
 
@@ -133,6 +176,7 @@ class JuliaPackage(ExtensionEasyBlock):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._env_toml = {'deps': {}, 'sources': {}}
+        self.julia_deps = []
 
     @property
     def env_toml(self):
@@ -303,7 +347,7 @@ class JuliaPackage(ExtensionEasyBlock):
         sections = ['deps', 'sources']
 
         # add packages found in dependencies to this installation environment
-        to_remove = set()
+        # to_remove = set()
         for dep in self.cfg.dependencies():
             dep_name = dep['name']
             dep_root = get_software_root(dep_name)
@@ -312,27 +356,32 @@ class JuliaPackage(ExtensionEasyBlock):
                 self.log.warning("No environment file found in dependency %s, skipping: %s", dep_name, dep_env)
                 continue
 
-            to_remove.add(dep_name)
-            trace_msg
+            self.julia_deps.append(dep_name)
+            trace_msg(
+                f"Incorporating Julia package dependencies from {dep_name} in installation environment: {dep_env}"
+            )
+
+            # to_remove.add(dep_name)
+            # trace_msg
 
             dep_toml = self.read_project_toml(dep_env)
             for section in sections:
                 self.env_toml.setdefault(section, {}).update(dep_toml.get(section, {}))
 
-        if to_remove:
-            trace_msg(
-                "Removing dependencies from installation environment. "
-                "These dependencies will not appear in the resulting module:"
-            )
-        for dep_type in ['dependencies', 'builddependencies']:
-            to_remove_idx = []
-            ref = self.cfg.get_ref(dep_type)
-            for idx, dep in enumerate(ref):
-                if dep['name'] in to_remove:
-                    trace_msg(f'- {dep}')
-                    to_remove_idx.insert(0, idx)
-            for idx in to_remove_idx:
-                del ref[idx]
+        # if to_remove:
+        #     trace_msg(
+        #         "Removing dependencies from installation environment. "
+        #         "These dependencies will not appear in the resulting module:"
+        #     )
+        # for dep_type in ['dependencies', 'builddependencies']:
+        #     to_remove_idx = []
+        #     ref = self.cfg.get_ref(dep_type)
+        #     for idx, dep in enumerate(ref):
+        #         if dep['name'] in to_remove:
+        #             trace_msg(f'- {dep}')
+        #             to_remove_idx.insert(0, idx)
+        #     for idx in to_remove_idx:
+        #         del ref[idx]
 
         # print("Updated dependencies after removing Julia packages: %s", self.cfg.dependencies())
         # print("Updated dependencies after removing Julia packages: %s", self.cfg.dependencies())
@@ -396,13 +445,18 @@ class JuliaPackage(ExtensionEasyBlock):
 
             depot_path = os.pathsep.join([tmpdir] + depot_path)
 
-            extrapath = " && ".join([
-                f"export JULIA_DEPOT_PATH=\"{depot_path}\"",
-                # Ensure TEST dependencies can be downloaded
-                # The alternative is to install them as normal dependencies of the package
-                # "export JULIA_PKG_OFFLINE=false",
-                ""
-            ])
+            # extrapath = " && ".join([
+            #     f"export JULIA_DEPOT_PATH=\"{depot_path}\"",
+            #     # Ensure TEST dependencies can be downloaded
+            #     # The alternative is to install them as normal dependencies of the package
+            #     # "export JULIA_PKG_OFFLINE=false",
+            #     # ""
+            # ])
+
+            extrapath = f"export JULIA_DEPOT_PATH=\"{depot_path}\""
+            if self.cfg['test_online']:
+                extrapath += " && export JULIA_PKG_OFFLINE=false"
+            extrapath += " && "
 
             cmd = ' '.join([
                 extrapath,
@@ -479,6 +533,16 @@ class JuliaPackage(ExtensionEasyBlock):
 
         pkg_dir = os.path.join('packages', self.name)
 
+        custom_commands = []
+        # Check that the compile cache of the dependencies can still be loaded. The check is only w.r.t the package
+        # name as rebuilding using PkgA and PkgB as dependenices can retrigger a compilation of PkgB in case e.g. it
+        # was a `weakdep` of PkgA with an associated extension
+        for julia_dep in self.julia_deps:
+            custom_commands.append(
+                _COMPILECACHE_CHECK % {'ext_name': julia_dep}
+            )
+        kwargs.setdefault('custom_commands', []).extend(custom_commands)
+
         custom_paths = {
             'files': [],
             'dirs': [pkg_dir],
@@ -498,9 +562,23 @@ class JuliaPackage(ExtensionEasyBlock):
         See issue easybuilders/easybuild-easyconfigs#17455
         """
         mod = super().make_module_extra()
-        if self.module_generator.SYNTAX:
-            mod += JULIA_PATHS_SOFT_INIT[self.module_generator.SYNTAX]
-        mod += self.module_generator.append_paths('JULIA_DEPOT_PATH', [''])
-        mod += self.module_generator.append_paths('JULIA_LOAD_PATH', [self.julia_env_path(absolute=False, base=False)])
+        # if self.module_generator.SYNTAX:
+        #     mod += JULIA_PATHS_SOFT_INIT[self.module_generator.SYNTAX]
+        # mod += self.module_generator.append_paths('JULIA_DEPOT_PATH', [''])
+
+        mod += self.module_generator.prepend_paths('EBJULIA_DEPOT_PATH', [''])
+        mod += self.module_generator.prepend_paths('EBJULIA_LOAD_PATH', [self.julia_env_path(absolute=False, base=False)])
 
         return mod
+
+    def make_module_footer(self):
+        """
+        Extend module footer with statements to set up shell completion for Click-based Python tools.
+        """
+        footer = super().make_module_footer()
+
+        if self.module_generator.SYNTAX:
+            extra_footer = JULIA_MODULE_FOOTER[self.module_generator.SYNTAX]
+            footer += '\n' + extra_footer + '\n'
+
+        return footer
