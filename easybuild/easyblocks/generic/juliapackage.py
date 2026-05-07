@@ -77,9 +77,11 @@ JULIA_MODULE_FOOTER = {
 setenv("JULIA_DEPOT_PATH", ":" .. os.getenv("EBJULIA_DEPOT_PATH") )
 setenv("JULIA_LOAD_PATH", os.getenv("EBJULIA_LOAD_PATH") .. ":")
 """,
+    # This needs testing, the module generate seems to work fine, but the loading of the module within EB does not
+    # properly resolve the $::env() and leaves it as a string
     "Tcl": """
-setenv JULIA_DEPOT_PATH ":$::env(EBJULIA_DEPOT_PATH)"
-setenv JULIA_LOAD_PATH "$::env(EBJULIA_LOAD_PATH):"
+setenv JULIA_DEPOT_PATH ":\$::env(EBJULIA_DEPOT_PATH)"
+setenv JULIA_LOAD_PATH "\$::env(EBJULIA_LOAD_PATH):"
 """,
 }
 
@@ -159,6 +161,7 @@ class JuliaPackage(ExtensionEasyBlock):
         self._env_toml = {'deps': {}, 'sources': {}}
         self.julia_deps = []
         self._julia_version = None
+        self._tmp_test_dir = None
 
     @property
     def julia_version(self) -> str:
@@ -190,6 +193,16 @@ class JuliaPackage(ExtensionEasyBlock):
             return False
 
         return self.master.ext_instances and self.master.ext_instances[-1] is self
+
+    @property
+    def tmp_test_dir(self):
+        """Temporary path used for running the test step."""
+        if not self._tmp_test_dir:
+            try:
+                self._tmp_test_dir = tempfile.mkdtemp(suffix='-julia_tests')
+            except Exception as e:
+                raise EasyBuildError("Failed to create temporary directory for Julia package testing: %s", str(e))
+        return self._tmp_test_dir
 
     @staticmethod
     def write_project_toml(file_path, project_toml):
@@ -394,17 +407,12 @@ class JuliaPackage(ExtensionEasyBlock):
             if testcmd is None:
                 testcmd = f"julia -e 'using Pkg; Pkg.test(\"{self.name}\")'"
 
-            try:
-                tmpdir = tempfile.mkdtemp()
-            except OSError as err:
-                raise EasyBuildError("Failed to create test install dir: %s", err)
-
             depot_path = self.get_julia_env("DEPOT_PATH")
             load_path = self.get_julia_env("LOAD_PATH")
             self.log.info("Original DEPOT_PATH for testing: %s", os.pathsep.join(depot_path))
             self.log.info("Original LOAD_PATH for testing: %s", os.pathsep.join(load_path))
 
-            depot_path = os.pathsep.join([tmpdir] + depot_path)
+            depot_path = os.pathsep.join([self.tmp_test_dir] + depot_path)
 
             extrapath = " && ".join([
                 f"export JULIA_DEPOT_PATH=\"{depot_path}\"",
@@ -423,7 +431,14 @@ class JuliaPackage(ExtensionEasyBlock):
 
     def install_source(self):
         """Add the Julia package source files in the installation directory."""
-        package_dir = os.path.join(self.installdir, 'packages', self.name)
+        if self.cfg['is_test_dependency']:
+            self.log.debug(
+                f"Package {self.name} is only needed for testing, installing sources in {self.tmp_test_dir}"
+            )
+            package_dir = os.path.join(self.tmp_test_dir, 'packages', self.name)
+        else:
+            package_dir = os.path.join(self.installdir, 'packages', self.name)
+        # This also warks for dirs and will fail if the destination already exists
         move_file(self.ext_dir if self.is_extension else self.start_dir, package_dir)
 
         # Add package to the main environment Project.toml file
@@ -446,10 +461,6 @@ class JuliaPackage(ExtensionEasyBlock):
         if not self.src:
             errmsg = "No source found for Julia package %s, required for installation. (src: %s)"
             raise EasyBuildError(errmsg, self.name, self.src)
-
-        if self.cfg['is_test_dependency']:
-            self.log.info("Package %s is only needed for testing, skipping installation", self.name)
-            return
 
         # Unpack source into install directory and add package to the main environment Project.toml file
         ExtensionEasyBlock.install_extension(self, unpack_src=True)
