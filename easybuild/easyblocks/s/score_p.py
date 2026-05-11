@@ -183,7 +183,7 @@ class EB_Score_minus_P(ConfigureMake):
 
     def _determine_shmem(self):
         """
-        Determine MPI toolchain to be used to build application. Tools use a common --with-mpi=
+        Determine SHMEM toolchain to be used to build application. Tools use a common --with-shmem=
         for this. Map the EasyBuild toolchains to the arguments understood by the configure scripts.
         Providing the compilers via environment variables is not recommended, as tools provide platform files with
         additional, potentially important, flags to be used during configure.
