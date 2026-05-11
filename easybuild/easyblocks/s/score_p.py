@@ -371,7 +371,7 @@ class EB_Score_minus_P(ConfigureMake):
         else:
             raise EasyBuildError(f"Unexpected software name {self.name} for this EasyBlock")
 
-        filtered_deps = build_option('filter_deps')
+        filtered_deps = build_option('filter_deps') or []
         # Go through all dependencies to determine which flags to pass explicitly to configure.
         for dep_name, dep_opts in deps.items():
             # In case a dependency is filtered, let either the hook or auto-detection handle
