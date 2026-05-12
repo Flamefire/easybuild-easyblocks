@@ -437,7 +437,7 @@ class EB_Score_minus_P(ConfigureMake):
             if llvm_root:
                 self.cfg.update('configopts', f'--with-llvm={llvm_root}/bin')
             elif rocm_llvm_root:
-                self.cfg.update('configopts', f'--with-llvm=${rocm_llvm_root}/bin')
+                self.cfg.update('configopts', f'--with-llvm={rocm_llvm_root}/bin')
 
     def configure_step(self, *args, **kwargs):
         """Configure the build, set configure options for compiler, MPI and dependencies."""
