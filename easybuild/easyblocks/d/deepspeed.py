@@ -105,26 +105,14 @@ class EB_DeepSpeed(PythonPackage):
             'TORCH_EXTENSIONS_DIR',
             'TORCH_CACHE',
             'HF_DATASETS_CACHE',
-            'RITIC_CKPT_DIR',
+            'MEGATRON_CKPT_DIR',
+            'CRITIC_CKPT_DIR',
         )
         base_dir = tempfile.mkdtemp(suffix='-testArtifacts', dir=self.builddir)
         for var in test_vars:
             path = os.path.join(base_dir, var.lower())
             env.setvar(var, path)
-        test_opts = self.cfg['testopts']
-        parallel = self.cfg.parallel
-        python_pkgs = self.get_installed_python_packages(names_only=True)
-        if parallel > 1:
-            if 'pytest-xdist' not in python_pkgs:
-                print_warning("Python package 'pytest-xdist' not found, not running tests in paralell", log=self.log)
-            else:
-                if '-n ' not in test_opts:
-                    parallel_tests = min(4, parallel - 1)
-                    if parallel_tests > 1:
-                        test_opts += f' -n {parallel_tests}'
-                        parallel = max(1, parallel // parallel_tests)
-        self.cfg['testopts'] = test_opts
-        env.setvar('MAX_JOBS', str(parallel))
+        env.setvar('MAX_JOBS', str(self.cfg.parallel))
         super().test_step()
 
     def sanity_check_step(self):
