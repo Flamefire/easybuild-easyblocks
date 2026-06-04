@@ -79,10 +79,6 @@ class JuliaBundle(Bundle, JuliaPackage):
     def prepare_step(self, *args, **kwargs):
         """Prepare for installing bundle of Julia packages."""
         super().prepare_step(*args, **kwargs)
-
-    def install_step(self):
-        """Prepare installation environment and dd all dependencies to project environment."""
-        self.prepare_julia_env()
         self.include_pkg_dependencies()
 
     def sanity_check_step(self, *args, **kwargs):

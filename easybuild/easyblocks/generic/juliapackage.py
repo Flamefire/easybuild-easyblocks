@@ -47,12 +47,12 @@ from easybuild.tools import tomllib
 
 _COMPILECACHE_CHECK = ' | '.join([
     "julia -E 'Base.compilecache_path(Base.identify_package(\"%(ext_name)s\"))'",
-    "grep '%(ext_name)s'"
+    "grep '%(grep_loc)s'"
 ])
 
 EXTS_FILTER_JULIA_PACKAGES = (
     " && ".join([
-        _COMPILECACHE_CHECK,
+        _COMPILECACHE_CHECK.replace('%(grep_loc)s', '%(ext_name)s'),
         "julia -e 'using %(ext_name)s'",
     ]),
     ""
@@ -407,7 +407,7 @@ class JuliaPackage(ExtensionEasyBlock):
                 self.log.warning("No environment file found in dependency %s, skipping: %s", dep_name, dep_env)
                 continue
 
-            self.julia_deps.append(dep_name)
+            self.julia_deps.append((dep_name, dep_root))
             trace_msg(
                 f"Incorporating Julia package dependencies from {dep_name} in installation environment: {dep_env}"
             )
@@ -418,9 +418,9 @@ class JuliaPackage(ExtensionEasyBlock):
                 data = dep_toml.get(section, {})
                 for toml in [self.env_toml, self.env_toml_test]:
                     sec_dct = toml.setdefault(section, {})
-                    for k,v in data.items():
-                        if k in sec_dct and sec_dct[k] != v:
-                            conflicts.append((k, section, dep_name, sec_dct[k], v))
+                    for key, val in data.items():
+                        if key in sec_dct and sec_dct[key] != val:
+                            conflicts.append((key, section, dep_name, sec_dct[key], val))
                     sec_dct.update(data)
             if conflicts:
                 error_msg = '\n'.join(
@@ -537,12 +537,10 @@ class JuliaPackage(ExtensionEasyBlock):
         pkg_dir = os.path.join('packages', self.name)
 
         custom_commands = []
-        # Check that the compile cache of the dependencies can still be loaded. The check is only w.r.t the package
-        # name as rebuilding using PkgA and PkgB as dependenices can retrigger a compilation of PkgB in case e.g. it
-        # was a `weakdep` of PkgA with an associated extension
-        for julia_dep in self.julia_deps:
+        # Check that the compile cache of the dependencies can still be loaded and is coming from the expected package
+        for dep, root in self.julia_deps:
             custom_commands.append(
-                _COMPILECACHE_CHECK % {'ext_name': julia_dep}
+                _COMPILECACHE_CHECK % {'ext_name': dep, 'grep_loc': root}
             )
         kwargs.setdefault('custom_commands', []).extend(custom_commands)
 
