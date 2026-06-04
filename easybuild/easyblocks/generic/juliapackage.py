@@ -413,10 +413,26 @@ class JuliaPackage(ExtensionEasyBlock):
             )
 
             dep_toml = self.read_project_toml(dep_env)
+            conflicts = []
             for section in sections:
                 data = dep_toml.get(section, {})
                 for toml in [self.env_toml, self.env_toml_test]:
-                    toml.setdefault(section, {}).update(data)
+                    sec_dct = toml.setdefault(section, {})
+                    for k,v in data.items():
+                        if k in sec_dct and sec_dct[k] != v:
+                            conflicts.append((k, section, dep_name, sec_dct[k], v))
+                    sec_dct.update(data)
+            if conflicts:
+                error_msg = '\n'.join(
+                    f'- Package "{k}" in section "{section}" `{current_v}` -> `{dep_v}`'
+                    for k, section, _, current_v, dep_v in conflicts
+                )
+                raise EasyBuildError(
+                    "\nConflicts found when merging dependency '%s' into installation environment:\n%s\n"
+                    "Make sure that all dependencies do not specify duplicate packages as extensions, otherwise the "
+                    "compile cache will be broken based on the module load order.",
+                    dep_name, error_msg
+                )
 
     def prepare_step(self, *args, **kwargs):
         """Prepare for Julia package installation."""
