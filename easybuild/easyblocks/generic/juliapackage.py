@@ -81,8 +81,8 @@ setenv("JULIA_LOAD_PATH", os.getenv("EBJULIA_LOAD_PATH") .. ":")
     # This needs testing, the module generate seems to work fine, but the loading of the module within EB does not
     # properly resolve the $::env() and leaves it as a string
     "Tcl": """
-setenv JULIA_DEPOT_PATH ":\$::env(EBJULIA_DEPOT_PATH)"
-setenv JULIA_LOAD_PATH "\$::env(EBJULIA_LOAD_PATH):"
+setenv JULIA_DEPOT_PATH ":$::env(EBJULIA_DEPOT_PATH)"
+setenv JULIA_LOAD_PATH "$::env(EBJULIA_LOAD_PATH):"
 """,
 }
 
@@ -262,7 +262,7 @@ class JuliaPackage(ExtensionEasyBlock):
             pkg_dir = os.path.dirname(pkg_path)
 
         if not os.path.isfile(pkg_path):
-            raise EasyBuildError("Project.toml file not found for package %s in path: %s", pkg_name, pkg_dir)
+            raise EasyBuildError("Project.toml file not found in path: %s", pkg_dir)
 
         project_toml = cls.read_project_toml(pkg_path)
         pkg_name = project_toml['name']
@@ -554,7 +554,10 @@ class JuliaPackage(ExtensionEasyBlock):
         # mod += self.module_generator.append_paths('JULIA_DEPOT_PATH', [''])
 
         mod += self.module_generator.prepend_paths('EBJULIA_DEPOT_PATH', [''])
-        mod += self.module_generator.prepend_paths('EBJULIA_LOAD_PATH', [self.julia_env_path(absolute=False, base=False)])
+        mod += self.module_generator.prepend_paths(
+            'EBJULIA_LOAD_PATH',
+            [self.julia_env_path(absolute=False, base=False)]
+        )
 
         return mod
 
