@@ -45,6 +45,8 @@ from easybuild.tools.run import run_shell_cmd
 from easybuild.tools.utilities import trace_msg
 from easybuild.tools import tomllib
 
+from easybuild.easyblocks.j.julia import EB_JULIA_DEPOT_PATH_VAR, EB_JULIA_LOAD_PATH_VAR
+
 _COMPILECACHE_CHECK = ' | '.join([
     "julia -E 'Base.compilecache_path(Base.identify_package(\"%(ext_name)s\"))'",
     "grep '%(grep_loc)s'"
@@ -58,33 +60,6 @@ EXTS_FILTER_JULIA_PACKAGES = (
     ""
 )
 USER_DEPOT_PATTERN = re.compile(r"\/\.julia\/?(.*\.toml)*$")
-
-# JULIA_PATHS_SOFT_INIT = {
-#     "Lua": """
-# if ( mode() == "load" ) then
-#     if ( os.getenv("JULIA_DEPOT_PATH") == nil ) then setenv("JULIA_DEPOT_PATH", ":") end
-#     if ( os.getenv("JULIA_LOAD_PATH") == nil ) then setenv("JULIA_LOAD_PATH", ":") end
-# end
-# """,
-#     "Tcl": """
-# if { [ module-info mode load ] } {
-#     if {![info exists env(JULIA_DEPOT_PATH)]} { setenv JULIA_DEPOT_PATH : }
-#     if {![info exists env(JULIA_LOAD_PATH)]} { setenv JULIA_LOAD_PATH : }
-# """,
-# }
-
-JULIA_MODULE_FOOTER = {
-    "Lua": """
-setenv("JULIA_DEPOT_PATH", ":" .. os.getenv("EBJULIA_DEPOT_PATH") )
-setenv("JULIA_LOAD_PATH", os.getenv("EBJULIA_LOAD_PATH") .. ":")
-""",
-    # This needs testing, the module generate seems to work fine, but the loading of the module within EB does not
-    # properly resolve the $::env() and leaves it as a string
-    "Tcl": """
-setenv JULIA_DEPOT_PATH ":$::env(EBJULIA_DEPOT_PATH)"
-setenv JULIA_LOAD_PATH "$::env(EBJULIA_LOAD_PATH):"
-""",
-}
 
 
 class JuliaPackage(ExtensionEasyBlock):
@@ -563,26 +538,11 @@ class JuliaPackage(ExtensionEasyBlock):
         See issue easybuilders/easybuild-easyconfigs#17455
         """
         mod = super().make_module_extra()
-        # if self.module_generator.SYNTAX:
-        #     mod += JULIA_PATHS_SOFT_INIT[self.module_generator.SYNTAX]
-        # mod += self.module_generator.append_paths('JULIA_DEPOT_PATH', [''])
 
-        mod += self.module_generator.prepend_paths('EBJULIA_DEPOT_PATH', [''])
+        mod += self.module_generator.prepend_paths(EB_JULIA_DEPOT_PATH_VAR, [''])
         mod += self.module_generator.prepend_paths(
-            'EBJULIA_LOAD_PATH',
+            EB_JULIA_LOAD_PATH_VAR,
             [self.julia_env_path(absolute=False, base=False)]
         )
 
         return mod
-
-    def make_module_footer(self):
-        """
-        Extend module footer with statements to set up shell completion for Click-based Python tools.
-        """
-        footer = super().make_module_footer()
-
-        if self.module_generator.SYNTAX:
-            extra_footer = JULIA_MODULE_FOOTER[self.module_generator.SYNTAX]
-            footer += '\n' + extra_footer + '\n'
-
-        return footer
