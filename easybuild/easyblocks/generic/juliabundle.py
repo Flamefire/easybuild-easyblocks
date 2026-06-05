@@ -53,6 +53,12 @@ class JuliaBundle(Bundle, JuliaPackage):
         super().__init__(*args, **kwargs)
 
         self.cfg['exts_defaultclass'] = 'JuliaPackage'
+        # Ensure that Julia packages such as LLVM do not try to use the EB_LLVM easyblock
+        # many packages have names that overlap with EB easyblocks, and would end up using them as default class for extensions, which is not what we want here. We force to always use JuliaPackage unless explicitly specified
+        # otherwise in the easyconfig file.
+        self.cfg['exts_default_options'] = {
+            'easyblock': 'JuliaPackage',
+        }
         self.cfg['exts_filter'] = EXTS_FILTER_JULIA_PACKAGES
 
         # need to disable templating to ensure that actual value for exts_default_options is updated...
