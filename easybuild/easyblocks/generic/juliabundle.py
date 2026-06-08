@@ -83,11 +83,6 @@ class JuliaBundle(Bundle, JuliaPackage):
 
         self.log.info("exts_default_options: %s", self.cfg['exts_default_options'])
 
-    def prepare_step(self, *args, **kwargs):
-        """Prepare for installing bundle of Julia packages."""
-        super().prepare_step(*args, **kwargs)
-        self.include_pkg_dependencies()
-
     def sanity_check_step(self, *args, **kwargs):
         """Custom sanity check for bundle of Julia packages"""
         custom_paths = {

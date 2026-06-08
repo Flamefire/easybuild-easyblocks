@@ -40,15 +40,17 @@ from easybuild.framework.easyconfig import CUSTOM
 from easybuild.framework.extensioneasyblock import ExtensionEasyBlock
 from easybuild.tools.build_log import EasyBuildError
 from easybuild.tools.modules import get_software_root, get_software_version
-from easybuild.tools.filetools import mkdir, move_file
+from easybuild.tools.filetools import move_file
 from easybuild.tools.run import run_shell_cmd
 from easybuild.tools.utilities import trace_msg
-from easybuild.tools import tomllib
 
 from easybuild.easyblocks.j.julia import EB_JULIA_DEPOT_PATH_VAR, EB_JULIA_LOAD_PATH_VAR
 
 _COMPILECACHE_CHECK = ' | '.join([
-    "julia -E 'Base.compilecache_path(Base.identify_package(\"%(ext_name)s\"))'",
+    # "julia -E 'Base.compilecache_path(Base.identify_package(\"%(ext_name)s\"), Base.get_world_counter())'",
+    # compilecache_path is not part of the stable API and changes arguments across versions
+    # allow internal cache resolution and use debug statemnts to get the path of the loaded cache
+    "JULIA_DEBUG=loading julia -e 'using %(ext_name)s' 2>&1 1>/dev/null",
     "grep '%(grep_loc)s'"
 ])
 
@@ -149,9 +151,9 @@ class JuliaPackage(ExtensionEasyBlock):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._env_toml = {'deps': {}, 'sources': {}}
-        self._env_toml_test = {'deps': {}, 'sources': {}}
-        self.julia_deps = []
+        self._pkg_deps = []
+        self._julia_deps = {}
+        self._julia_deps_test = {}
         self._julia_version = None
         self._tmp_test_dir = None
 
@@ -172,18 +174,25 @@ class JuliaPackage(ExtensionEasyBlock):
         return self._julia_version
 
     @property
-    def env_toml(self):
-        """Property to store content of installation environment Project.toml file."""
+    def pkg_deps(self):
+        """List of Julia dependencies found in this installation."""
         if self.is_extension:
-            return self.master.env_toml
-        return self._env_toml
+            return self.master.pkg_deps
+        return self._pkg_deps
 
     @property
-    def env_toml_test(self):
-        """Property to store content of installation environment Project.toml file."""
+    def julia_deps(self):
+        """List of Julia dependencies found in this installation."""
         if self.is_extension:
-            return self.master.env_toml_test
-        return self._env_toml_test
+            return self.master.julia_deps
+        return self._julia_deps
+
+    @property
+    def julia_deps_test(self):
+        """List of Julia dependencies found in this installation."""
+        if self.is_extension:
+            return self.master.julia_deps_test
+        return self._julia_deps_test
 
     @property
     def is_last_extension(self):
@@ -205,64 +214,6 @@ class JuliaPackage(ExtensionEasyBlock):
             except Exception as e:
                 raise EasyBuildError("Failed to create temporary directory for Julia package testing: %s", str(e))
         return self._tmp_test_dir
-
-    @staticmethod
-    def write_project_toml(file_path, project_toml):
-        """Write a Project.toml file with the given content to the given path"""
-        mkdir(os.path.dirname(file_path), parents=True)
-        with open(file_path, 'w') as env_proj:
-            for section, items in project_toml.items():
-                env_proj.write(f'[{section}]\n')
-                for key, value in items.items():
-                    value = repr(value)
-                    value = value.replace("'", '"')
-                    value = value.replace(': ', ' = ')
-                    env_proj.write(f'{key} = {value}\n')
-                env_proj.write('\n')
-
-    @staticmethod
-    def read_project_toml(file_path):
-        """Read a Project.toml file and return its content as a dict"""
-        with open(file_path, 'rb') as env_proj:
-            project_toml = tomllib.load(env_proj)
-        return project_toml
-
-    @classmethod
-    def update_toml_data(cls, toml_data, pkg_path):
-        """Update given toml data with new package and return updated data"""
-        if os.path.isdir(pkg_path):
-            pkg_dir = pkg_path
-            pkg_path = os.path.join(pkg_path, 'Project.toml')
-        else:
-            pkg_dir = os.path.dirname(pkg_path)
-
-        if not os.path.isfile(pkg_path):
-            raise EasyBuildError("Project.toml file not found in path: %s", pkg_dir)
-
-        project_toml = cls.read_project_toml(pkg_path)
-        pkg_name = project_toml['name']
-        pkg_uuid = project_toml['uuid']
-
-        toml_data.setdefault('deps', {})[pkg_name] = pkg_uuid
-        toml_data.setdefault('sources', {})[pkg_name] = {'path': pkg_dir}
-
-        return toml_data
-
-    def write_env_toml(self):
-        """Write environment Project.toml file"""
-        self.write_project_toml(self.julia_env_path(base=False), self.env_toml)
-
-    def write_env_toml_test(self):
-        """Write test environment Project.toml file"""
-        self.write_project_toml(self.julia_env_path(base=False, basedir=self.tmp_test_dir), self.env_toml_test)
-
-    def add_to_env_toml(self, package_dir):
-        """Add package to environment toml file of the installation"""
-        self.update_toml_data(self.env_toml, package_dir)
-
-    def add_to_env_toml_test(self, package_dir):
-        """Add package to environment toml file of the test environment"""
-        self.update_toml_data(self.env_toml_test, package_dir)
 
     def julia_env_path(self, absolute=True, base=True, basedir=None):
         """
@@ -332,6 +283,10 @@ class JuliaPackage(ExtensionEasyBlock):
         self.log.debug("Preparing Julia 'LOAD_PATH' for installation: %s", install_load)
         env.setvar("JULIA_LOAD_PATH", install_load)
 
+        # Disable EB controlled PATHS to enforce the specific configurations
+        env.setvar(EB_JULIA_DEPOT_PATH_VAR, "")
+        env.setvar(EB_JULIA_LOAD_PATH_VAR, "")
+
         if project_toml not in self.get_julia_env("LOAD_PATH"):
             errmsg = "Failed to prepare Julia environment for installation of: %s"
             raise EasyBuildError(errmsg, self.name)
@@ -348,12 +303,29 @@ class JuliaPackage(ExtensionEasyBlock):
         # Enable automatic precompilation
         env.setvar('JULIA_PKG_PRECOMPILE_AUTO', 'true')
 
+    def add_package(self, pkg_source, test_only=False):
+        pkg_name = os.path.basename(pkg_source)
+        if pkg_name in self.julia_deps and self.julia_deps[pkg_name] != pkg_source:
+            raise EasyBuildError(
+                "Conflict detected for package '%s': already added from source '%s', cannot add from source '%s'",
+                pkg_name, self.julia_deps[pkg_name], pkg_source
+            )
+        self.julia_deps_test[pkg_name] = pkg_source
+        if not test_only:
+            self.julia_deps[pkg_name] = pkg_source
+
     def install_pkg(self, basedir=None):
         """Execute Julia.Pkg command to install package from its sources"""
         basedir = basedir or self.installdir
+        env = self.julia_env_path(basedir=basedir)
+
+        package_specs = ', '.join(f'PackageSpec(path="{path}")' for path in self.julia_deps.values())
+
         julia_pkg_cmd = [
             'using Pkg',
-            'Pkg.activate("%s")' % self.julia_env_path(basedir=basedir),
+            f'Pkg.activate("{env}")',
+
+            f'Pkg.develop([{package_specs}]; preserve=PRESERVE_ALL)',
             # Usage `Pkg.instantiate()` after all sources are in place to let Pkg handle all dependencies.
             # This has the advantage of letting Pkg deal with the order and parallel installation.
             'Pkg.instantiate()',
@@ -369,45 +341,46 @@ class JuliaPackage(ExtensionEasyBlock):
 
         return res.output
 
+    def _deps_from_project(self, environment):
+        """Get list of dependencies from a Project.toml file"""
+        julia_root = get_software_root('Julia')
+        cmd = "; ".join([
+            'using Pkg',
+            f'Pkg.activate("{environment}")',
+            # 'Pkg.status(; mode=PKGMODE_MANIFEST)',
+            'for (_, pkg) in Pkg.dependencies()',
+            'println("$(pkg.source)")',
+            'end'
+        ])
+
+        res = run_shell_cmd(f"julia -E '{cmd}'", split_stderr=True, hidden=True)
+        deps = res.output.strip().splitlines()
+
+        # Filter out Julia's stdlib dependencies
+        deps = filter(lambda d: not d.startswith(julia_root), deps)
+        deps = filter(lambda d: d != 'nothing', deps)
+
+        return list(deps)
+
     def include_pkg_dependencies(self):
         """Add to installation environment all Julia packages already present in its dependencies"""
-        sections = ['deps', 'sources']
-
         # add packages found in dependencies to this installation environment
         for dep in self.cfg.dependencies():
             dep_name = dep['name']
             dep_root = get_software_root(dep_name)
-            dep_env = os.path.join(dep_root, self.julia_env_path(absolute=False, base=False))
-            if not os.path.isfile(dep_env):
-                self.log.warning("No environment file found in dependency %s, skipping: %s", dep_name, dep_env)
+            dep_env = self.julia_env_path(absolute=True, base=True, basedir=dep_root)
+            dep_manifest = os.path.join(dep_env, 'Manifest.toml')
+            if not os.path.isfile(dep_manifest):
+                self.log.warning("No Manifest.toml file found in dependency %s, skipping: %s", dep_name, dep_env)
                 continue
 
-            self.julia_deps.append((dep_name, dep_root))
+            self.pkg_deps.append((dep_name, dep_root))
             trace_msg(
                 f"Incorporating Julia package dependencies from {dep_name} in installation environment: {dep_env}"
             )
 
-            dep_toml = self.read_project_toml(dep_env)
-            conflicts = []
-            for section in sections:
-                data = dep_toml.get(section, {})
-                for toml in [self.env_toml, self.env_toml_test]:
-                    sec_dct = toml.setdefault(section, {})
-                    for key, val in data.items():
-                        if key in sec_dct and sec_dct[key] != val:
-                            conflicts.append((key, section, dep_name, sec_dct[key], val))
-                    sec_dct.update(data)
-            if conflicts:
-                error_msg = '\n'.join(
-                    f'- Package "{k}" in section "{section}" `{current_v}` -> `{dep_v}`'
-                    for k, section, _, current_v, dep_v in conflicts
-                )
-                raise EasyBuildError(
-                    "\nConflicts found when merging dependency '%s' into installation environment:\n%s\n"
-                    "Make sure that all dependencies do not specify duplicate packages as extensions, otherwise the "
-                    "compile cache will be broken based on the module load order.",
-                    dep_name, error_msg
-                )
+            for pkg_path in self._deps_from_project(dep_env):
+                self.add_package(pkg_path)
 
     def prepare_step(self, *args, **kwargs):
         """Prepare for Julia package installation."""
@@ -416,13 +389,7 @@ class JuliaPackage(ExtensionEasyBlock):
         if get_software_root('Julia') is None:
             raise EasyBuildError("Julia not included as dependency!")
 
-    def configure_step(self):
-        """No separate configuration for JuliaPackage."""
-        pass
-
-    def build_step(self):
-        """No separate build procedure for JuliaPackage."""
-        pass
+        self.include_pkg_dependencies()
 
     def test_step(self):
         """
@@ -436,11 +403,20 @@ class JuliaPackage(ExtensionEasyBlock):
 
         if self.cfg['runtest']:
             if testcmd is None:
-                testcmd = f"julia -e 'using Pkg; Pkg.test(\"{self.name}\")'"
+                env = self.julia_env_path(basedir=self.tmp_test_dir)
+                package_specs = ', '.join(f'PackageSpec(path="{path}")' for path in self.julia_deps_test.values())
+                testcmd = [
+                    'using Pkg',
+                    f'Pkg.activate("{env}")',
+                    f'Pkg.develop([{package_specs}]; preserve=PRESERVE_ALL)',
+                    f'Pkg.test("{self.name}")',
+                ]
+                testcmd = '; '.join(testcmd)
+                testcmd = f"julia -e '{testcmd}'"
 
-            # Write test environment Project.toml that also include path reference to test dependencies
-            self.write_env_toml_test()
-
+            # Also add normal DEPOT/LOAD paths to environment to try and re-use pre-compiled caches as much as possible
+            # But also ensure that artifacts for packages that do not need recompilation are still found in the tests
+            self.prepare_julia_env(online=self.cfg['test_online'])
             self.prepare_julia_env(basedir=self.tmp_test_dir, online=self.cfg['test_online'])
 
             cmd = ' '.join([
@@ -461,26 +437,26 @@ class JuliaPackage(ExtensionEasyBlock):
             package_dir = os.path.join(self.tmp_test_dir, 'packages', self.name)
         else:
             package_dir = os.path.join(self.installdir, 'packages', self.name)
+
         # This also warks for dirs and will fail if the destination already exists
         move_file(self.ext_dir if self.is_extension else self.start_dir, package_dir)
 
         # Add all packages to the test environment Project.toml file
-        self.add_to_env_toml_test(package_dir)
-        if not self.cfg['is_test_dependency']:
-            self.add_to_env_toml(package_dir)
+        self.add_package(package_dir, test_only=self.cfg['is_test_dependency'])
 
         subpkg_dirs = self.cfg['subpackages_dirs'] or []
         for subpkg_dir in subpkg_dirs:
+            # pkg_name = os.path.basename(subpkg_dir)
             subpkg_path = os.path.join(package_dir, subpkg_dir)
             if not os.path.isdir(subpkg_path):
                 self.log.warning("Sub-package directory specified but not found, skipping: %s", subpkg_path)
                 continue
             trace_msg(f"Adding sub-package from specified directory {subpkg_path}")
-            self.add_to_env_toml(subpkg_path)
+
+            self.add_package(subpkg_path, test_only=self.cfg['is_test_dependency'])
 
     def _install_step(self, basedir=None):
         """Install step commons between single-package and extensions based installs."""
-        self.write_env_toml()
         self.prepare_julia_env(basedir=basedir, online=self.cfg['download_pkg_deps'])
         return self.install_pkg(basedir=basedir)
 
@@ -513,10 +489,13 @@ class JuliaPackage(ExtensionEasyBlock):
 
         custom_commands = []
         # Check that the compile cache of the dependencies can still be loaded and is coming from the expected package
-        for dep, root in self.julia_deps:
-            custom_commands.append(
-                _COMPILECACHE_CHECK % {'ext_name': dep, 'grep_loc': root}
-            )
+
+        if not self.is_extension:
+            for dep, root in self.pkg_deps:
+                root_comp = os.path.join(root, 'compiled')
+                custom_commands.append(
+                    _COMPILECACHE_CHECK % {'ext_name': dep, 'grep_loc': root_comp}
+                )
         kwargs.setdefault('custom_commands', []).extend(custom_commands)
 
         custom_paths = {
@@ -542,7 +521,7 @@ class JuliaPackage(ExtensionEasyBlock):
         mod += self.module_generator.prepend_paths(EB_JULIA_DEPOT_PATH_VAR, [''])
         mod += self.module_generator.prepend_paths(
             EB_JULIA_LOAD_PATH_VAR,
-            [self.julia_env_path(absolute=False, base=False)]
+            [self.julia_env_path(absolute=False, base=True)]
         )
 
         return mod
