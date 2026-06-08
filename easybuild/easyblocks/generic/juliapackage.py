@@ -99,11 +99,6 @@ class JuliaPackage(ExtensionEasyBlock):
             'download_pkg_deps': [
                 False, "Let Julia download and bundle all needed dependencies for this installation", CUSTOM
             ],
-            'is_test_dependency': [
-                False,
-                "Whether this package is only needed for testing and should not be added to installation environment",
-                CUSTOM
-            ],
             'julia_debug': [
                 False,
                 "Whether to set JULIA_DEBUG=all during installation and testing, to get more verbose output.",
@@ -117,10 +112,6 @@ class JuliaPackage(ExtensionEasyBlock):
             'test_online': [
                 False,
                 "Allow online tests that require downloading dependencies. By default, tests are run in offline mode.",
-                CUSTOM
-            ],
-            'subpackages_dirs': [
-                None, "List of subdirectories to look for additional packages to add to the environment",
                 CUSTOM
             ],
         })
@@ -152,6 +143,7 @@ class JuliaPackage(ExtensionEasyBlock):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._pkg_deps = []
+        self._pkt_to_test = []
         self._julia_deps = {}
         self._julia_deps_test = {}
         self._julia_version = None
@@ -179,6 +171,13 @@ class JuliaPackage(ExtensionEasyBlock):
         if self.is_extension:
             return self.master.pkg_deps
         return self._pkg_deps
+
+    @property
+    def pkg_to_test(self):
+        """List of Julia dependencies to be included in the test environment."""
+        if self.is_extension:
+            return self.master.pkg_to_test
+        return self._pkt_to_test
 
     @property
     def julia_deps(self):
@@ -231,8 +230,8 @@ class JuliaPackage(ExtensionEasyBlock):
 
         return project_env
 
-    def set_pkg_offline(self, online=False):
-        """Enable offline mode of Julia Pkg"""
+    def set_pkg_remote(self, online=False):
+        """Enable online/offline mode of Julia Pkg"""
 
         julia_version = get_software_version('Julia')
         if LooseVersion(julia_version) >= LooseVersion('1.5'):
@@ -291,9 +290,8 @@ class JuliaPackage(ExtensionEasyBlock):
             errmsg = "Failed to prepare Julia environment for installation of: %s"
             raise EasyBuildError(errmsg, self.name)
 
-        # Enable offline mode
-        if not online:
-            self.set_pkg_offline()
+        # Enable/disable offline mode
+        self.set_pkg_remote(online=online)
 
         if self.cfg['julia_debug']:
             env.setvar('JULIA_DEBUG', 'all')
@@ -329,6 +327,8 @@ class JuliaPackage(ExtensionEasyBlock):
             # Usage `Pkg.instantiate()` after all sources are in place to let Pkg handle all dependencies.
             # This has the advantage of letting Pkg deal with the order and parallel installation.
             'Pkg.instantiate()',
+            # Ensure operations done only by build.jl are done for all packages if needed
+            'Pkg.build()',
         ]
 
         julia_pkg_cmd = '; '.join(julia_pkg_cmd)
@@ -364,8 +364,10 @@ class JuliaPackage(ExtensionEasyBlock):
 
     def include_pkg_dependencies(self):
         """Add to installation environment all Julia packages already present in its dependencies"""
+        build_only_deps = self.cfg.dependencies(build_only=True)
         # add packages found in dependencies to this installation environment
         for dep in self.cfg.dependencies():
+            test_only = dep in build_only_deps
             dep_name = dep['name']
             dep_root = get_software_root(dep_name)
             dep_env = self.julia_env_path(absolute=True, base=True, basedir=dep_root)
@@ -374,13 +376,18 @@ class JuliaPackage(ExtensionEasyBlock):
                 self.log.warning("No Manifest.toml file found in dependency %s, skipping: %s", dep_name, dep_env)
                 continue
 
-            self.pkg_deps.append((dep_name, dep_root))
-            trace_msg(
-                f"Incorporating Julia package dependencies from {dep_name} in installation environment: {dep_env}"
-            )
+            if test_only:
+                trace_msg(
+                    f"Incorporating Julia package in TEST    environment {dep_name}: {dep_env}"
+                )
+            else:
+                self.pkg_deps.append((dep_name, dep_root))
+                trace_msg(
+                    f"Incorporating Julia package in INSTALL environment {dep_name}: {dep_env}"
+                )
 
             for pkg_path in self._deps_from_project(dep_env):
-                self.add_package(pkg_path)
+                self.add_package(pkg_path, test_only=dep in build_only_deps)
 
     def prepare_step(self, *args, **kwargs):
         """Prepare for Julia package installation."""
@@ -397,22 +404,18 @@ class JuliaPackage(ExtensionEasyBlock):
 
         :param return_output: return output and exit code of test command
         """
-        testcmd = None
-        if isinstance(self.cfg['runtest'], str):
-            testcmd = self.cfg['runtest']
-
-        if self.cfg['runtest']:
-            if testcmd is None:
-                env = self.julia_env_path(basedir=self.tmp_test_dir)
-                package_specs = ', '.join(f'PackageSpec(path="{path}")' for path in self.julia_deps_test.values())
-                testcmd = [
-                    'using Pkg',
-                    f'Pkg.activate("{env}")',
-                    f'Pkg.develop([{package_specs}]; preserve=PRESERVE_ALL)',
-                    f'Pkg.test("{self.name}")',
-                ]
-                testcmd = '; '.join(testcmd)
-                testcmd = f"julia -e '{testcmd}'"
+        if self.pkg_to_test:
+            env = self.julia_env_path(basedir=self.tmp_test_dir)
+            pkg_specs = ', '.join(f'PackageSpec(path="{path}")' for path in self.julia_deps_test.values())
+            pkg_test = ', '.join(f'"{pkg}"' for pkg in self.pkg_to_test)
+            testcmd = [
+                'using Pkg',
+                f'Pkg.activate("{env}")',
+                f'Pkg.develop([{pkg_specs}]; preserve=PRESERVE_ALL)',
+                f'Pkg.test([{pkg_test}])',
+            ]
+            testcmd = '; '.join(testcmd)
+            testcmd = f"julia -e '{testcmd}'"
 
             # Also add normal DEPOT/LOAD paths to environment to try and re-use pre-compiled caches as much as possible
             # But also ensure that artifacts for packages that do not need recompilation are still found in the tests
@@ -429,31 +432,9 @@ class JuliaPackage(ExtensionEasyBlock):
 
     def install_source(self):
         """Add the Julia package source files in the installation directory."""
-        if self.cfg['is_test_dependency']:
-            self.log.debug(
-                f"Package {self.name} is only needed for testing, installing sources in {self.tmp_test_dir}"
-            )
-            trace_msg("Installing as a test dependency...")
-            package_dir = os.path.join(self.tmp_test_dir, 'packages', self.name)
-        else:
-            package_dir = os.path.join(self.installdir, 'packages', self.name)
-
-        # This also warks for dirs and will fail if the destination already exists
-        move_file(self.ext_dir if self.is_extension else self.start_dir, package_dir)
-
-        # Add all packages to the test environment Project.toml file
-        self.add_package(package_dir, test_only=self.cfg['is_test_dependency'])
-
-        subpkg_dirs = self.cfg['subpackages_dirs'] or []
-        for subpkg_dir in subpkg_dirs:
-            # pkg_name = os.path.basename(subpkg_dir)
-            subpkg_path = os.path.join(package_dir, subpkg_dir)
-            if not os.path.isdir(subpkg_path):
-                self.log.warning("Sub-package directory specified but not found, skipping: %s", subpkg_path)
-                continue
-            trace_msg(f"Adding sub-package from specified directory {subpkg_path}")
-
-            self.add_package(subpkg_path, test_only=self.cfg['is_test_dependency'])
+        package_dir = os.path.join(self.installdir, 'packages', self.name)
+        move_file(self.start_dir, package_dir)
+        self.add_package(package_dir)
 
     def _install_step(self, basedir=None):
         """Install step commons between single-package and extensions based installs."""
@@ -475,24 +456,23 @@ class JuliaPackage(ExtensionEasyBlock):
         ExtensionEasyBlock.install_extension(self, unpack_src=True)
         self.install_source()
 
+        if self.cfg['runtest']:
+            self.pkg_to_test.append(self.name)
+
         if self.is_last_extension:
             self._install_step()
             self.test_step()
 
     def sanity_check_step(self, *args, **kwargs):
         """Custom sanity check for JuliaPackage"""
-        if self.cfg['is_test_dependency']:
-            self.log.debug(f"Package {self.name} is only used for testing, skipping sanity check")
-            return (True, "Test dependency, skipping sanity check")
-
         pkg_dir = os.path.join('packages', self.name)
 
         custom_commands = []
-        # Check that the compile cache of the dependencies can still be loaded and is coming from the expected package
 
+        # Check that the compile cache of the dependencies can still be loaded and is coming from the expected package
         if not self.is_extension:
             for dep, root in self.pkg_deps:
-                root_comp = os.path.join(root, 'compiled')
+                # root_comp = os.path.join(root, 'compiled')
                 custom_commands.append(
                     # _COMPILECACHE_CHECK % {'ext_name': dep, 'grep_loc': f'Loading object cache file .*{root_comp}'}
                     _COMPILECACHE_CHECK % {'ext_name': dep, 'grep_loc': dep}
