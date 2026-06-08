@@ -51,7 +51,7 @@ _COMPILECACHE_CHECK = ' | '.join([
     # compilecache_path is not part of the stable API and changes arguments across versions
     # allow internal cache resolution and use debug statemnts to get the path of the loaded cache
     "JULIA_DEBUG=loading julia -e 'using %(ext_name)s' 2>&1 1>/dev/null",
-    "grep '%(grep_loc)s'"
+    "grep 'Loading object cache file .*%(grep_loc)s'"
 ])
 
 EXTS_FILTER_JULIA_PACKAGES = (
@@ -231,14 +231,14 @@ class JuliaPackage(ExtensionEasyBlock):
 
         return project_env
 
-    def set_pkg_offline(self):
+    def set_pkg_offline(self, online=False):
         """Enable offline mode of Julia Pkg"""
 
         julia_version = get_software_version('Julia')
         if LooseVersion(julia_version) >= LooseVersion('1.5'):
             # Enable offline mode of Julia Pkg
             # https://pkgdocs.julialang.org/v1/api/#Pkg.offline
-            env.setvar('JULIA_PKG_OFFLINE', 'true')
+            env.setvar('JULIA_PKG_OFFLINE', 'false' if online else 'true')
         else:
             errmsg = (
                 "Cannot set offline mode in Julia v%s (needs Julia >= 1.5). "
@@ -494,7 +494,9 @@ class JuliaPackage(ExtensionEasyBlock):
             for dep, root in self.pkg_deps:
                 root_comp = os.path.join(root, 'compiled')
                 custom_commands.append(
-                    _COMPILECACHE_CHECK % {'ext_name': dep, 'grep_loc': root_comp}
+                    # _COMPILECACHE_CHECK % {'ext_name': dep, 'grep_loc': f'Loading object cache file .*{root_comp}'}
+                    _COMPILECACHE_CHECK % {'ext_name': dep, 'grep_loc': dep}
+
                 )
         kwargs.setdefault('custom_commands', []).extend(custom_commands)
 
