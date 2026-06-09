@@ -31,7 +31,7 @@ import os
 
 from easybuild.tools.build_log import EasyBuildError
 from easybuild.easyblocks.generic.bundle import Bundle
-from easybuild.easyblocks.generic.juliapackage import EXTS_FILTER_JULIA_PACKAGES, JuliaPackage
+from easybuild.easyblocks.generic.juliapackage import JuliaPackage
 
 
 class JuliaBundle(Bundle, JuliaPackage):
@@ -61,7 +61,6 @@ class JuliaBundle(Bundle, JuliaPackage):
         self.cfg['exts_default_options'] = {
             'easyblock': 'JuliaPackage',
         }
-        self.cfg['exts_filter'] = EXTS_FILTER_JULIA_PACKAGES
 
         # need to disable templating to ensure that actual value for exts_default_options is updated...
         with self.cfg.disable_templating():
@@ -94,7 +93,3 @@ class JuliaBundle(Bundle, JuliaPackage):
             'dirs': [os.path.join('packages', self.name)],
         }
         super().sanity_check_step(custom_paths=custom_paths)
-
-    def make_module_extra(self, *args, **kwargs):
-        """Custom module environment from JuliaPackage"""
-        return super().make_module_extra(*args, **kwargs)

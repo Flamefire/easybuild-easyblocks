@@ -54,13 +54,6 @@ _COMPILECACHE_CHECK = ' | '.join([
     "grep -E 'Loading (object )?cache file .*%(grep_loc)s'"
 ])
 
-EXTS_FILTER_JULIA_PACKAGES = (
-    " && ".join([
-        _COMPILECACHE_CHECK.replace('%(grep_loc)s', '%(ext_name)s'),
-        "julia -e 'using %(ext_name)s'",
-    ]),
-    ""
-)
 USER_DEPOT_PATTERN = re.compile(r"\/\.julia\/?(.*\.toml)*$")
 
 
@@ -433,6 +426,14 @@ class JuliaPackage(ExtensionEasyBlock):
 
         self.include_pkg_dependencies()
 
+    def configure_step(self):
+        """Configure step for Julia packages is a no-op, as there is no configuration needed before installation."""
+        pass
+
+    def build_step(self):
+        """Build step for Julia packages is a no-op, as there is no build needed before installation."""
+        pass
+
     def test_step(self):
         """
         Test the built Julia package.
@@ -486,8 +487,14 @@ class JuliaPackage(ExtensionEasyBlock):
 
     def install_step(self):
         """Prepare installation environment and install Julia package."""
+        if self.cfg['runtest']:
+            self.pkg_to_test.append(self.name)
+
         self.install_source()
-        return self._install_step()
+        res = self._install_step()
+        self.test_step()
+
+        return res
 
     def install_extension(self):
         """Install Julia package as an extension."""
@@ -514,10 +521,19 @@ class JuliaPackage(ExtensionEasyBlock):
 
         pkg_dir = os.path.join('packages', self.name)
 
+        ext_filters = ["julia -e 'using %(ext_name)s'"]
+
+        cc_check = False
+        if LooseVersion(self.julia_version) >= LooseVersion('1.8'):
+            cc_check = True
+            ext_filters.insert(
+                0,
+                _COMPILECACHE_CHECK % {'ext_name': self.name, 'grep_loc': self.name}
+            )
+
         custom_commands = []
         # Check that the compile cache of the dependencies can still be loaded and is coming from the expected package
-
-        if not self.is_extension:
+        if not self.is_extension and cc_check:
             for dep, root in self.pkg_deps:
                 # root_comp = os.path.join(root, 'compiled')
                 custom_commands.append(
@@ -533,7 +549,7 @@ class JuliaPackage(ExtensionEasyBlock):
         }
         kwargs.update({'custom_paths': custom_paths})
 
-        return ExtensionEasyBlock.sanity_check_step(self, EXTS_FILTER_JULIA_PACKAGES, *args, **kwargs)
+        return ExtensionEasyBlock.sanity_check_step(self, (" && ".join(ext_filters), ""), *args, **kwargs)
 
     def make_module_extra(self, *args, **kwargs):
         """
