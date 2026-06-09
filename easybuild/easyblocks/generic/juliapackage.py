@@ -149,7 +149,7 @@ class JuliaPackage(ExtensionEasyBlock):
         self._julia_deps_test = {}
         self._julia_version = None
         self._pkg_deps = []
-        self._pkg_to_test = []
+        self._pkgs_to_test = []
         self._tmp_test_dir = None
         self._installdir_created = False
 
@@ -206,11 +206,11 @@ class JuliaPackage(ExtensionEasyBlock):
         return self._pkg_deps
 
     @property
-    def pkg_to_test(self):
+    def pkgs_to_test(self):
         """List of Julia dependencies to be included in the test environment."""
         if self.is_extension:
-            return self.master.pkg_to_test
-        return self._pkg_to_test
+            return self.master.pkgs_to_test
+        return self._pkgs_to_test
 
     @property
     def tmp_test_dir(self):
@@ -474,16 +474,16 @@ class JuliaPackage(ExtensionEasyBlock):
         :param return_output: return output and exit code of test command
         """
         if self.cfg['runtest']:
-            self.pkg_to_test.append(self.name)
+            self.pkgs_to_test.append(self.name)
 
         if not self.is_last_extension:
             trace_msg("Delegating testing to last extension")
             return
 
-        if self.pkg_to_test:
+        if self.pkgs_to_test:
             env = self.julia_env_path(basedir=self.tmp_test_dir)
             pkg_specs = ', '.join(f'PackageSpec(path="{path}")' for path in self.julia_deps_test.values())
-            pkg_test = ', '.join(f'"{pkg}"' for pkg in self.pkg_to_test)
+            pkg_test = ', '.join(f'"{pkg}"' for pkg in self.pkgs_to_test)
             testcmd = [
                 'using Pkg',
                 f'Pkg.activate("{env}")',
