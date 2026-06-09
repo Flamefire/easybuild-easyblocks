@@ -128,10 +128,12 @@ class JuliaPackage(ExtensionEasyBlock):
             "LOAD_PATH": "julia -E 'Base.load_path()'",
         }
 
-        try:
-            res = run_shell_cmd(julia_read_cmd[env_var], hidden=True)
-        except KeyError:
+        if env_var not in julia_read_cmd:
             raise EasyBuildError("Unknown Julia environment variable requested: %s", env_var)
+
+        cmd = julia_read_cmd[env_var]
+
+        res = run_shell_cmd(cmd, hidden=True)
 
         try:
             parsed_var = ast.literal_eval(res.output)
@@ -142,11 +144,12 @@ class JuliaPackage(ExtensionEasyBlock):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._pkg_deps = []
-        self._pkt_to_test = []
+        self._conflicts = []
         self._julia_deps = {}
         self._julia_deps_test = {}
         self._julia_version = None
+        self._pkg_deps = []
+        self._pkg_to_test = []
         self._tmp_test_dir = None
 
     @property
@@ -166,18 +169,19 @@ class JuliaPackage(ExtensionEasyBlock):
         return self._julia_version
 
     @property
-    def pkg_deps(self):
-        """List of Julia dependencies found in this installation."""
+    def conflicts(self):
+        """List of conflicting software."""
         if self.is_extension:
-            return self.master.pkg_deps
-        return self._pkg_deps
+            return self.master.conflicts
+        return self._conflicts
 
     @property
-    def pkg_to_test(self):
-        """List of Julia dependencies to be included in the test environment."""
-        if self.is_extension:
-            return self.master.pkg_to_test
-        return self._pkt_to_test
+    def is_last_extension(self):
+        """Whether this extension is the last one to be installed in the installation."""
+        if not self.is_extension:
+            return False
+
+        return self.master.ext_instances and self.master.ext_instances[-1] is self
 
     @property
     def julia_deps(self):
@@ -194,12 +198,18 @@ class JuliaPackage(ExtensionEasyBlock):
         return self._julia_deps_test
 
     @property
-    def is_last_extension(self):
-        """Whether this extension is the last one to be installed in the installation."""
-        if not self.is_extension:
-            return False
+    def pkg_deps(self):
+        """List of Julia dependencies found in this installation."""
+        if self.is_extension:
+            return self.master.pkg_deps
+        return self._pkg_deps
 
-        return self.master.ext_instances and self.master.ext_instances[-1] is self
+    @property
+    def pkg_to_test(self):
+        """List of Julia dependencies to be included in the test environment."""
+        if self.is_extension:
+            return self.master.pkg_to_test
+        return self._pkg_to_test
 
     @property
     def tmp_test_dir(self):
@@ -303,17 +313,29 @@ class JuliaPackage(ExtensionEasyBlock):
 
     def add_package(self, pkg_source, test_only=False):
         pkg_name = os.path.basename(pkg_source)
-        if pkg_name in self.julia_deps and self.julia_deps[pkg_name] != pkg_source:
-            raise EasyBuildError(
-                "Conflict detected for package '%s': already added from source '%s', cannot add from source '%s'",
-                pkg_name, self.julia_deps[pkg_name], pkg_source
-            )
+        if pkg_name in self.julia_deps:
+            prev_source = self.julia_deps[pkg_name]
+            if prev_source != pkg_source:
+                self.conflicts.append((self.name, pkg_name, prev_source, pkg_source))
+
         self.julia_deps_test[pkg_name] = pkg_source
         if not test_only:
             self.julia_deps[pkg_name] = pkg_source
 
+    def _check_conflicts(self):
+        """Check for conflicts in Julia dependencies and raise an error if any are found."""
+        if self.conflicts:
+            conflict_msgs = []
+            for ext_name, pkg_name, prev_source, new_source in self.conflicts:
+                conflict_msgs.append(
+                    f"Conflict detected for package '{pkg_name}' in extension '{ext_name}': "
+                    f"already added from source '{prev_source}', cannot add from source '{new_source}'"
+                )
+            raise EasyBuildError("Conflicts detected in Julia dependencies:\n" + "\n".join(conflict_msgs))
+
     def install_pkg(self, basedir=None):
         """Execute Julia.Pkg command to install package from its sources"""
+        self._check_conflicts()
         basedir = basedir or self.installdir
         env = self.julia_env_path(basedir=basedir)
 
