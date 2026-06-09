@@ -186,28 +186,28 @@ class JuliaPackage(ExtensionEasyBlock):
 
     @property
     def julia_deps(self):
-        """List of Julia dependencies found in this installation."""
+        """List of Julia dependencies found in this installation excluding test dependencies."""
         if self.is_extension:
             return self.master.julia_deps
         return self._julia_deps
 
     @property
     def julia_deps_test(self):
-        """List of Julia dependencies found in this installation."""
+        """List of Julia dependencies found in this installation including test dependencies."""
         if self.is_extension:
             return self.master.julia_deps_test
         return self._julia_deps_test
 
     @property
     def pkg_deps(self):
-        """List of Julia dependencies found in this installation."""
+        """List of easybuild runtime dependencies that will need to be sanity-checked."""
         if self.is_extension:
             return self.master.pkg_deps
         return self._pkg_deps
 
     @property
     def pkgs_to_test(self):
-        """List of Julia dependencies to be included in the test environment."""
+        """List extension wiht `runtest` set to true that should be tested."""
         if self.is_extension:
             return self.master.pkgs_to_test
         return self._pkgs_to_test
