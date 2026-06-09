@@ -29,6 +29,7 @@ EasyBuild support for bundles of Julia packages, implemented as an easyblock
 """
 import os
 
+from easybuild.tools.build_log import EasyBuildError
 from easybuild.easyblocks.generic.bundle import Bundle
 from easybuild.easyblocks.generic.juliapackage import EXTS_FILTER_JULIA_PACKAGES, JuliaPackage
 
@@ -80,6 +81,9 @@ class JuliaBundle(Bundle, JuliaPackage):
                         'filename': '%(name)s-%(version)s.tar.gz',
                     }
                 ]
+
+        if self.cfg['is_test_dependency']:
+            raise EasyBuildError("Test dependencies can only be defined as an extension, not as a bundle itself")
 
         self.log.info("exts_default_options: %s", self.cfg['exts_default_options'])
 

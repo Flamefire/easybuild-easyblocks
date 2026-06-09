@@ -51,7 +51,7 @@ _COMPILECACHE_CHECK = ' | '.join([
     # compilecache_path is not part of the stable API and changes arguments across versions
     # allow internal cache resolution and use debug statemnts to get the path of the loaded cache
     "JULIA_DEBUG=loading julia -e 'using %(ext_name)s' 2>&1 1>/dev/null",
-    "grep 'Loading object cache file .*%(grep_loc)s'"
+    "grep -E 'Loading (object )?cache file .*%(grep_loc)s'"
 ])
 
 EXTS_FILTER_JULIA_PACKAGES = (
@@ -98,6 +98,11 @@ class JuliaPackage(ExtensionEasyBlock):
         extra_vars.update({
             'download_pkg_deps': [
                 False, "Let Julia download and bundle all needed dependencies for this installation", CUSTOM
+            ],
+            'is_test_dependency': [
+                False,
+                "Whether this package is only needed for testing and should not be added to installation environment",
+                CUSTOM
             ],
             'julia_debug': [
                 False,
@@ -339,6 +344,15 @@ class JuliaPackage(ExtensionEasyBlock):
         basedir = basedir or self.installdir
         env = self.julia_env_path(basedir=basedir)
 
+        if len(self.julia_deps) == 0:
+            if len(self.julia_deps_test) > 0:
+                raise EasyBuildError(
+                    "Only test dependencies found for Julia package %s, cannot proceed with installation. "
+                    "Please check that all needed dependencies are properly specified in the easyconfig file.",
+                    self.name
+                )
+            raise EasyBuildError("No Julia packages to install for: %s", self.name)
+
         package_specs = ', '.join(f'PackageSpec(path="{path}")' for path in self.julia_deps.values())
 
         julia_pkg_cmd = [
@@ -369,7 +383,6 @@ class JuliaPackage(ExtensionEasyBlock):
         cmd = "; ".join([
             'using Pkg',
             f'Pkg.activate("{environment}")',
-            # 'Pkg.status(; mode=PKGMODE_MANIFEST)',
             'for (_, pkg) in Pkg.dependencies()',
             'println("$(pkg.source)")',
             'end'
@@ -454,9 +467,17 @@ class JuliaPackage(ExtensionEasyBlock):
 
     def install_source(self):
         """Add the Julia package source files in the installation directory."""
-        package_dir = os.path.join(self.installdir, 'packages', self.name)
+        if self.cfg['is_test_dependency']:
+            self.log.debug(
+                f"Package {self.name} is only needed for testing, installing sources in {self.tmp_test_dir}"
+            )
+            trace_msg("Installing as a test dependency...")
+            package_dir = os.path.join(self.tmp_test_dir, 'packages', self.name)
+        else:
+            package_dir = os.path.join(self.installdir, 'packages', self.name)
+
         move_file(self.start_dir, package_dir)
-        self.add_package(package_dir)
+        self.add_package(package_dir, test_only=self.cfg['is_test_dependency'])
 
     def _install_step(self, basedir=None):
         """Install step commons between single-package and extensions based installs."""
@@ -487,11 +508,15 @@ class JuliaPackage(ExtensionEasyBlock):
 
     def sanity_check_step(self, *args, **kwargs):
         """Custom sanity check for JuliaPackage"""
+        if self.cfg['is_test_dependency']:
+            self.log.debug(f"Package {self.name} is only used for testing, skipping sanity check")
+            return (True, "Test dependency, skipping sanity check")
+
         pkg_dir = os.path.join('packages', self.name)
 
         custom_commands = []
-
         # Check that the compile cache of the dependencies can still be loaded and is coming from the expected package
+
         if not self.is_extension:
             for dep, root in self.pkg_deps:
                 # root_comp = os.path.join(root, 'compiled')
@@ -529,3 +554,10 @@ class JuliaPackage(ExtensionEasyBlock):
         )
 
         return mod
+
+    def make_extension_list(self):
+        """Generate list of extensions while filtering out test dependencies."""
+        exts = super().make_extension_list()
+        test_dep_names = self.julia_deps_test.keys() - self.julia_deps.keys()
+
+        return list(filter(lambda ext: ext[0] not in test_dep_names, exts))
