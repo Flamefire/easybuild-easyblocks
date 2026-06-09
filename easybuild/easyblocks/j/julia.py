@@ -56,7 +56,7 @@ if !isempty(EB_DEPOT_PATH)
 end
 """
 
-WRAPPER_CONTENT = rf"""#!/bin/sh
+WRAPPER_CONTENT = r"""#!/bin/sh
 LD_LIBRARY_PATH="$EBROOTJULIA/lib:$EBROOTJULIA/lib/julia:$LD_LIBRARY_PATH" julia.bin "$@"
 """
 
