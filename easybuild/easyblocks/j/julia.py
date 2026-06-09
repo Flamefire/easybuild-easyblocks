@@ -28,8 +28,9 @@ Custom EasyBlock for installing Julia binaries with an extra startup script to g
 @author: Davide Grassano (CECAM)
 """
 import os
+import stat
 
-from easybuild.tools.filetools import write_file
+from easybuild.tools.filetools import write_file, move_file, adjust_permissions
 from easybuild.tools.systemtools import get_shared_lib_ext
 from easybuild.easyblocks.generic.tarball import Tarball
 
@@ -55,6 +56,10 @@ if !isempty(EB_DEPOT_PATH)
 end
 """
 
+WRAPPER_CONTENT = rf"""#!/bin/sh
+LD_LIBRARY_PATH="$EBROOTJULIA/lib:$EBROOTJULIA/lib/julia:$LD_LIBRARY_PATH" julia.bin "$@"
+"""
+
 
 class EB_Julia(Tarball):
     """Add custom startup script and sanity checks to Julia installations."""
@@ -65,7 +70,8 @@ class EB_Julia(Tarball):
         shlib_ext = get_shared_lib_ext()
 
         custom_files = [
-            'bin/julia', 'include/julia/julia.h', f'lib/libjulia.{shlib_ext}', 'etc/julia/startup.jl',
+            'bin/julia', 'bin/julia.bin',
+            'include/julia/julia.h', f'lib/libjulia.{shlib_ext}', 'etc/julia/startup.jl',
         ]
         custom_dirs = ['bin', 'etc', 'include', 'lib', 'share']
         custom_commands = [
@@ -88,3 +94,10 @@ class EB_Julia(Tarball):
         os.makedirs(os.path.dirname(startup_script), exist_ok=True)
 
         write_file(startup_script, STARTUP_CONTENT)
+        julia_bin = os.path.join(self.installdir, 'bin', 'julia')
+        julia_bin_new = os.path.join(self.installdir, 'bin', 'julia.bin')
+
+        # install wrapper with linking safeguards for Julia libraries
+        move_file(julia_bin, julia_bin_new)
+        write_file(julia_bin, WRAPPER_CONTENT)
+        adjust_permissions(julia_bin, stat.S_IRUSR | stat.S_IXUSR)
