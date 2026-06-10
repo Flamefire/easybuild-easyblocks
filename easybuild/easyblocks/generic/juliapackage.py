@@ -155,7 +155,8 @@ class JuliaPackage(ExtensionEasyBlock):
         self._julia_deps_test = {}
         self._julia_version = None
         self._pkg_deps = []
-        self._pkgs_to_test = []
+        self._pkgs_to_test_online = []
+        self._pkgs_to_test_offline = []
         self._tmp_test_dir = None
         self._installdir_created = False
 
@@ -226,11 +227,18 @@ class JuliaPackage(ExtensionEasyBlock):
         return self._pkg_deps
 
     @property
-    def pkgs_to_test(self) -> List[str]:
-        """List extension names with `runtest` set to True that should be tested."""
+    def pkgs_to_test_online(self) -> List[str]:
+        """List extension names with `runtest` set to True that should be tested in online mode."""
         if self.is_extension:
-            return self.master.pkgs_to_test
-        return self._pkgs_to_test
+            return self.master.pkgs_to_test_online
+        return self._pkgs_to_test_online
+
+    @property
+    def pkgs_to_test_offline(self) -> List[str]:
+        """List extension names with `runtest` set to True that should be tested in offline mode."""
+        if self.is_extension:
+            return self.master.pkgs_to_test_offline
+        return self._pkgs_to_test_offline
 
     @property
     def tmp_test_dir(self) -> str:
@@ -521,33 +529,59 @@ class JuliaPackage(ExtensionEasyBlock):
         :param return_output: return output and exit code of test command
         """
         if self.cfg['runtest']:
-            self.pkgs_to_test.append(self.name)
+            if self.cfg['test_online']:
+                self.pkgs_to_test_online.append(self.name)
+            else:
+                self.pkgs_to_test_offline.append(self.name)
 
         if not self.is_last_extension:
             trace_msg("Delegating testing to last extension")
             return
 
-        if self.pkgs_to_test:
-            env = self.julia_env_path(basedir=self.tmp_test_dir)
+        env = self.julia_env_path(basedir=self.tmp_test_dir)
+        testcmd = [
+            'using Pkg',
+            f'Pkg.activate("{env}")',
+            # f'Pkg.develop([{pkg_specs}]; preserve=PRESERVE_ALL)',
+            # 'Pkg.test([{pkg_test}])',
+        ]
+        if self.julia_deps_test:
             pkg_specs = ', '.join(f'PackageSpec(path="{path}")' for path in self.julia_deps_test.values())
-            pkg_test = ', '.join(f'"{pkg}"' for pkg in self.pkgs_to_test)
-            testcmd = [
-                'using Pkg',
-                f'Pkg.activate("{env}")',
-                f'Pkg.develop([{pkg_specs}]; preserve=PRESERVE_ALL)',
-                f'Pkg.test([{pkg_test}])',
-            ]
-            testcmd = '; '.join(testcmd)
-            testcmd = f"julia -e '{testcmd}'"
+            testcmd.append(f'Pkg.develop([{pkg_specs}]; preserve=PRESERVE_ALL)')
+        testcmd.append('Pkg.test([{pkg_test}])')
+        testcmd = '; '.join(testcmd)
+        testcmd = f"julia -e '{testcmd}'"
 
-            # Also add normal DEPOT/LOAD paths to environment to try and re-use pre-compiled caches as much as possible
-            # But also ensure that artifacts for packages that do not need recompilation are still found in the tests
-            self.prepare_julia_env(online=self.cfg['test_online'])
-            self.prepare_julia_env(basedir=self.tmp_test_dir, online=self.cfg['test_online'])
+        # Also add normal DEPOT/LOAD paths to environment to try and re-use pre-compiled caches as much as possible
+        # But also ensure that artifacts for packages that do not need recompilation are still found in the tests
+        self.prepare_julia_env()
+        self.prepare_julia_env(basedir=self.tmp_test_dir)
+
+        # Run offline tests first just in case the online ones could modify the environment
+        if self.pkgs_to_test_offline:
+            trace_msg("Running offline tests:")
+            self.set_pkg_remote(online=False)
+            pkg_test = ', '.join(f'"{pkg}"' for pkg in self.pkgs_to_test_offline)
 
             cmd = ' '.join([
                 self.cfg['pretestopts'],
-                testcmd,
+                testcmd.format(pkg_test=pkg_test),
+                self.cfg['testopts'],
+            ])
+
+            res = run_shell_cmd(cmd, fail_on_error=False)
+
+            if res.exit_code != 0:
+                self.report_test_failure(f"Offline tests failed for Julia package {self.name}:\n{res.output}")
+
+        if self.pkgs_to_test_online:
+            trace_msg("Running online tests:")
+            self.set_pkg_remote(online=True)
+            pkg_test = ', '.join(f'"{pkg}"' for pkg in self.pkgs_to_test_online)
+
+            cmd = ' '.join([
+                self.cfg['pretestopts'],
+                testcmd.format(pkg_test=pkg_test),
                 self.cfg['testopts'],
             ])
 
