@@ -26,6 +26,7 @@
 EasyBuild support for bundles of Julia packages, implemented as an easyblock
 
 @author: Alex Domingo (Vrije Universiteit Brussel)
+@author: Davide Grassano (CECAM, EPFL)
 """
 import os
 
