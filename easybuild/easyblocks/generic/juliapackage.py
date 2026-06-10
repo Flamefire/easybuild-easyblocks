@@ -146,6 +146,10 @@ class JuliaPackage(ExtensionEasyBlock):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+        if self.cfg['is_test_dependency'] and not self.is_extension:
+            raise EasyBuildError("Test dependencies can only be defined as an extension, not as a bundle itself")
+
         self._conflicts = []
         self._julia_deps = {}
         self._julia_deps_test = {}
