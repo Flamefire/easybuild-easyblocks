@@ -636,12 +636,11 @@ class JuliaPackage(ExtensionEasyBlock):
             pkg_dir = os.path.join('packages', self.name)
 
             custom_commands = []
-            # Check that the compile cache of the dependencies can still be loaded and is coming from the expected package
+            # Check that the compile cache of the dependencies can still be loaded
             if not self.is_extension and cc_check:
                 for dep, _ in self.pkg_deps:
                     # root_comp = os.path.join(root, 'compiled')
                     custom_commands.append(
-                        # _COMPILECACHE_CHECK % {'ext_name': dep, 'grep_loc': f'Loading object cache file .*{root_comp}'}
                         _COMPILECACHE_CHECK % {'ext_name': dep, 'grep_loc': dep}
 
                     )

@@ -28,8 +28,6 @@ EasyBuild support for bundles of Julia packages, implemented as an easyblock
 @author: Alex Domingo (Vrije Universiteit Brussel)
 @author: Davide Grassano (CECAM, EPFL)
 """
-import os
-
 from easybuild.easyblocks.generic.bundle import Bundle
 from easybuild.easyblocks.generic.juliapackage import JuliaPackage
 
