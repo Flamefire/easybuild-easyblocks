@@ -207,7 +207,7 @@ class JuliaPackage(ExtensionEasyBlock):
 
     @property
     def pkgs_to_test(self):
-        """List extension wiht `runtest` set to true that should be tested."""
+        """List extension with `runtest` set to true that should be tested."""
         if self.is_extension:
             return self.master.pkgs_to_test
         return self._pkgs_to_test
