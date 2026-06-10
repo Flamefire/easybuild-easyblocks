@@ -81,12 +81,7 @@ class JuliaBundle(Bundle, JuliaPackage):
                     }
                 ]
 
-        self.log.info("exts_default_options: %s", self.cfg['exts_default_options'])
+        # The name of the bundle can be arbitrary and not necessarily a Julia package
+        self.cfg['exts_filter'] = None
 
-    def sanity_check_step(self, *args, **kwargs):
-        """Custom sanity check for bundle of Julia packages"""
-        custom_paths = {
-            'files': [],
-            'dirs': [os.path.join('packages', self.name)],
-        }
-        super().sanity_check_step(custom_paths=custom_paths)
+        self.log.info("exts_default_options: %s", self.cfg['exts_default_options'])

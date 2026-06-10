@@ -626,37 +626,45 @@ class JuliaPackage(ExtensionEasyBlock):
             self.log.debug(f"Package {self.name} is only used for testing, skipping sanity check")
             return (True, "Test dependency, skipping sanity check")
 
-        pkg_dir = os.path.join('packages', self.name)
-
-        ext_filters = ["julia -e 'using %(ext_name)s'"]
-
+        exts_filter = ["julia -e 'using %(ext_name)s'"]
         cc_check = False
         if LooseVersion(self.julia_version) >= LooseVersion('1.8'):
             cc_check = True
-            ext_filters.insert(
-                0,
-                _COMPILECACHE_CHECK % {'ext_name': self.name, 'grep_loc': self.name}
-            )
+            exts_filter.insert(0, _COMPILECACHE_CHECK % {'ext_name': self.name, 'grep_loc': self.name})
 
-        custom_commands = []
-        # Check that the compile cache of the dependencies can still be loaded and is coming from the expected package
-        if not self.is_extension and cc_check:
-            for dep, _ in self.pkg_deps:
-                # root_comp = os.path.join(root, 'compiled')
-                custom_commands.append(
-                    # _COMPILECACHE_CHECK % {'ext_name': dep, 'grep_loc': f'Loading object cache file .*{root_comp}'}
-                    _COMPILECACHE_CHECK % {'ext_name': dep, 'grep_loc': dep}
+        if self.is_extension:
+            pkg_dir = os.path.join('packages', self.name)
 
-                )
-        kwargs.setdefault('custom_commands', []).extend(custom_commands)
+            custom_commands = []
+            # Check that the compile cache of the dependencies can still be loaded and is coming from the expected package
+            if not self.is_extension and cc_check:
+                for dep, _ in self.pkg_deps:
+                    # root_comp = os.path.join(root, 'compiled')
+                    custom_commands.append(
+                        # _COMPILECACHE_CHECK % {'ext_name': dep, 'grep_loc': f'Loading object cache file .*{root_comp}'}
+                        _COMPILECACHE_CHECK % {'ext_name': dep, 'grep_loc': dep}
 
-        custom_paths = {
-            'files': [],
-            'dirs': [pkg_dir],
-        }
+                    )
+            kwargs.setdefault('custom_commands', []).extend(custom_commands)
+
+            custom_paths = {
+                'files': [],
+                'dirs': [pkg_dir],
+            }
+
+            exts_filter = " && ".join(exts_filter)
+            exts_filter = (exts_filter, "")
+
+            self.cfg['exts_filter'] = exts_filter
+        else:
+            custom_paths = {
+                'files': [],
+                'dirs': ['packages', 'environments'],
+            }
+
         kwargs.update({'custom_paths': custom_paths})
 
-        return ExtensionEasyBlock.sanity_check_step(self, (" && ".join(ext_filters), ""), *args, **kwargs)
+        return super().sanity_check_step(*args, **kwargs)
 
     def make_module_extra(self, *args, **kwargs):
         """
