@@ -33,6 +33,8 @@ import os
 import re
 import tempfile
 
+from typing import List, Dict, Tuple, Union
+
 from easybuild.tools import LooseVersion
 
 import easybuild.tools.environment as env
@@ -170,50 +172,64 @@ class JuliaPackage(ExtensionEasyBlock):
         return self._julia_version
 
     @property
-    def conflicts(self):
-        """List of conflicting software."""
+    def conflicts(self) -> List[Tuple[str, str, str, str]]:
+        """List of 4-tuple conflicting software (same package included from multiple locations) including:
+        - extension name where conflict is found
+        - package name with conflict
+        - previous source of the package that caused the conflict
+        - new source of the package that caused the conflict
+        """
         if self.is_extension:
             return self.master.conflicts
         return self._conflicts
 
     @property
-    def is_last_extension(self):
-        """Whether this extension is the last one to be installed in the installation."""
+    def is_last_extension(self) -> bool:
+        """Whether this extension is the last one to be installed."""
         if not self.is_extension:
             return True
 
         return self.master.ext_instances and self.master.ext_instances[-1] is self
 
     @property
-    def julia_deps(self):
-        """List of Julia dependencies found in this installation excluding test dependencies."""
+    def julia_deps(self) -> Dict[str, str]:
+        """List of Julia dependencies found in this installation excluding test dependencies
+        - key: package name
+        - value: package source
+        """
         if self.is_extension:
             return self.master.julia_deps
         return self._julia_deps
 
     @property
-    def julia_deps_test(self):
-        """List of Julia dependencies found in this installation including test dependencies."""
+    def julia_deps_test(self) -> Dict[str, str]:
+        """List of Julia dependencies found in this installation including test dependencies
+        - key: package name
+        - value: package source
+        """
         if self.is_extension:
             return self.master.julia_deps_test
         return self._julia_deps_test
 
     @property
-    def pkg_deps(self):
-        """List of easybuild runtime dependencies that will need to be sanity-checked."""
+    def pkg_deps(self) -> List[Tuple[str, str]]:
+        """List of easybuild runtime dependencies that will need to be sanity-checked. 2-tuple including:
+        - dependency name
+        - dependency root (equivalent to get_software_root)
+        """
         if self.is_extension:
             return self.master.pkg_deps
         return self._pkg_deps
 
     @property
-    def pkgs_to_test(self):
-        """List extension with `runtest` set to true that should be tested."""
+    def pkgs_to_test(self) -> List[str]:
+        """List extension names with `runtest` set to True that should be tested."""
         if self.is_extension:
             return self.master.pkgs_to_test
         return self._pkgs_to_test
 
     @property
-    def tmp_test_dir(self):
+    def tmp_test_dir(self) -> str:
         """Temporary path used for running the test step."""
         if self.is_extension:
             return self.master.tmp_test_dir
@@ -225,9 +241,14 @@ class JuliaPackage(ExtensionEasyBlock):
                 raise EasyBuildError("Failed to create temporary directory for Julia package testing: %s", str(e))
         return self._tmp_test_dir
 
-    def julia_env_path(self, absolute=True, base=True, basedir=None):
+    def julia_env_path(self, absolute: bool = True, base: bool = True, basedir: Union[str, None] = None) -> str:
         """
         Return path to installation environment file.
+
+        :param absolute: whether to return absolute path to environment file or relative path to `basedir`
+        :param base: whether to return path to environment file or its parent directory
+        :param basedir: base directory for the environment, as in env=BASEDIR/environments/v#.#/Project.toml.
+        Defaults to installation directory of this package if not specified.
         """
         basedir = basedir or self.installdir
         julia_version = self.julia_version.split('.')
@@ -241,7 +262,7 @@ class JuliaPackage(ExtensionEasyBlock):
 
         return project_env
 
-    def set_pkg_remote(self, online=False):
+    def set_pkg_remote(self, online: bool = False):
         """Enable online/offline mode of Julia Pkg"""
 
         julia_version = get_software_version('Julia')
@@ -257,7 +278,7 @@ class JuliaPackage(ExtensionEasyBlock):
             )
             raise EasyBuildError(errmsg, julia_version)
 
-    def prepare_julia_env(self, basedir=None, online=False):
+    def prepare_julia_env(self, basedir: Union[str, None] = None, online: bool = False):
         """
         1. Remove user depot and prepend installation directory to DEPOT_PATH.
         Top directory in Julia DEPOT_PATH is the target installation directory.
@@ -272,6 +293,12 @@ class JuliaPackage(ExtensionEasyBlock):
         3. Enable offline mode in Julia to avoid automatic downloads of packages.
 
         4. Enable automatic precompilation of packages after each build.
+
+        5. Enable/disable debug mode in Julia to get more verbose output during installation and testing.
+
+        :param basedir: base directory for the environment, as in env=BASEDIR/environments/v#.#/Project.toml.
+        Defaults to installation directory of this package if not specified.
+        :param online: whether to allow online operations of Julia Pkg
         """
         basedir = basedir or self.installdir
         # Grab both DEPOT_PATH and LOAD_PATH before any changes are made
@@ -304,8 +331,7 @@ class JuliaPackage(ExtensionEasyBlock):
         # Enable/disable offline mode
         self.set_pkg_remote(online=online)
 
-        if self.cfg['julia_debug']:
-            env.setvar('JULIA_DEBUG', 'all')
+        env.setvar('JULIA_DEBUG', 'all' if self.cfg['julia_debug'] else '')
 
         # Set the maximum number of concurrent package builds
         env.setvar('JULIA_NUM_PRECOMPILE_TASKS', str(self.cfg.parallel))
@@ -313,6 +339,12 @@ class JuliaPackage(ExtensionEasyBlock):
         env.setvar('JULIA_PKG_PRECOMPILE_AUTO', 'true')
 
     def add_package(self, pkg_source, test_only=False):
+        """Add a Julia package to the list of dependencies to be installed.
+
+        :param pkg_source: path to the package source to be added as dependency
+        :param test_only: whether this package is only needed for testing and should not be added to installation
+        environment
+        """
         pkg_name = os.path.basename(pkg_source)
         if pkg_name in self.julia_deps:
             prev_source = self.julia_deps[pkg_name]
@@ -334,8 +366,12 @@ class JuliaPackage(ExtensionEasyBlock):
                 )
             raise EasyBuildError("Conflicts detected in Julia dependencies:\n" + "\n".join(conflict_msgs))
 
-    def install_pkg(self, basedir=None):
-        """Execute Julia.Pkg command to install package from its sources"""
+    def install_pkg(self, basedir: Union[str, None] = None):
+        """Execute Julia.Pkg command to install all packages in `self.julia_deps` in the install environment.
+
+        :param basedir: base directory for the environment, as in env=BASEDIR/environments/v#.#/Project.toml.
+        Defaults to installation directory of this package if not specified
+        """
         self._check_conflicts()
         basedir = basedir or self.installdir
         env = self.julia_env_path(basedir=basedir)
@@ -373,8 +409,11 @@ class JuliaPackage(ExtensionEasyBlock):
 
         return res.output
 
-    def _deps_from_project(self, environment):
-        """Get list of dependencies from a Project.toml file"""
+    def _deps_from_project(self, environment: str) -> List[str]:
+        """Get list of dependencies from a Julia environment
+
+        :param environment: path to Julia environment to query for dependencies
+        """
         julia_root = get_software_root('Julia')
         cmd = "; ".join([
             'using Pkg',
@@ -454,8 +493,12 @@ class JuliaPackage(ExtensionEasyBlock):
         move_file(self.start_dir, package_dir)
         self.add_package(package_dir, test_only=self.cfg['is_test_dependency'])
 
-    def _build_install_step(self, basedir=None):
-        """Install step commons between single-package and extensions based installs."""
+    def _build_install_step(self, basedir: Union[str, None] = None):
+        """Install step commons between single-package and extensions based installs.
+
+        :param basedir: base directory for the environment, as in env=BASEDIR/environments/v#.#/Project.toml.
+        Defaults to installation directory of this package if not specified.
+        """
         self.install_source()
         if self.is_last_extension:
             self.prepare_julia_env(basedir=basedir, online=self.cfg['download_pkg_deps'])
@@ -579,13 +622,9 @@ class JuliaPackage(ExtensionEasyBlock):
 
     def make_module_extra(self, *args, **kwargs):
         """
-        Module load initializes JULIA_DEPOT_PATH and JULIA_LOAD_PATH with default values if they are not set.
-
-        Path to installation directory is appended to JULIA_DEPOT_PATH.
-        Path to the environment file of this installation is prepended to JULIA_LOAD_PATH.
-        This configuration fulfils the rule that user depot has to be the first path in JULIA_DEPOT_PATH,
-        allowing user to add custom Julia packages while having packages in this installation available.
-        See issue easybuilders/easybuild-easyconfigs#17455
+        Set EB-specific PATH like variables `EB_JULIA_DEPOT_PATH` and `EB_JULIA_LOAD_PATH`.
+        These are then used by Easybuild's custom Julia startup script (etc/julia/startup.jl) to set JULIA_DEPOT_PATH
+        and JULIA_LOAD_PATH correctly at runtime.
         """
         mod = super().make_module_extra()
 
