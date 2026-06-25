@@ -32,6 +32,7 @@ EasyBuild support for Python packages, implemented as an easyblock
 @author: Jens Timmerman (Ghent University)
 @author: Alexander Grund (TU Dresden)
 @author: Samuel Moors (Vrije Universiteit Brussel)
+@author: Jan Andre Reuter (Forschungszentrum Jülich)
 """
 import os
 import re
@@ -44,13 +45,12 @@ import easybuild.tools.environment as env
 from easybuild.base import fancylogger
 from easybuild.easyblocks.python import det_installed_python_packages, det_pip_version, EXTS_FILTER_DUMMY_PACKAGES
 from easybuild.easyblocks.python import EXTS_FILTER_PYTHON_PACKAGES, partial_normalize_pip, run_pip_check, run_pip_list
-from easybuild.easyblocks.python import set_py_env_vars
-
+from easybuild.easyblocks.python import set_py_env_vars, UNLIMITED
 from easybuild.framework.easyconfig import CUSTOM
 from easybuild.framework.easyconfig.default import DEFAULT_CONFIG
 from easybuild.framework.easyconfig.templates import PYPI_SOURCE
 from easybuild.framework.extensioneasyblock import ExtensionEasyBlock
-from easybuild.tools.build_log import EasyBuildError, print_msg
+from easybuild.tools.build_log import EasyBuildError, print_msg, print_warning
 from easybuild.tools.config import build_option, PYTHONPATH, EBPYTHONPREFIXES
 from easybuild.tools.filetools import change_dir, mkdir, read_file, remove_dir, symlink, which, write_file, search_file
 from easybuild.tools.modules import ModEnvVarType, get_software_root
@@ -59,6 +59,12 @@ from easybuild.tools.run import run_shell_cmd
 from easybuild.tools.utilities import nub
 from easybuild.tools.hooks import CONFIGURE_STEP, BUILD_STEP, TEST_STEP, INSTALL_STEP
 
+
+# Default ulimit for stack size, enforced when ulimit is set to unlimited on the system.
+# This is especially important with Python 3.14 and newer, where an unlimited stack size
+# can yield an infinite recursion in recursion tests, eventually filling up all available
+# memory. See: https://github.com/python/cpython/issues/143460
+ULIMIT_DEFAULT = 8192
 
 # not 'easy_install' deliberately, to avoid that pkg installations listed in easy-install.pth get preference
 # '.' is required at the end when using easy_install/pip in unpacked source dir
@@ -512,10 +518,13 @@ class PythonPackage(ExtensionEasyBlock):
             'max_py_minver': [None, "Maximum minor Python version (only relevant when using system Python)", CUSTOM],
             'sanity_pip_check': [True, "Run 'python -m pip check' to ensure all required Python packages are "
                                        "installed and check for any package with an invalid (0.0.0) version.", CUSTOM],
-            'sanity_check_pip_list': [None, "Run 'python -m pip list' to ensure specified package names and versions "
-                                            "are correct.", CUSTOM],
+            'sanity_check_pip_list': [None, "Fail if specified package names and versions do not match "
+                                            "'python -m pip list' output. Defaults to True if --upload-test-report is "
+                                            "set. The check only runs if 'sanity_pip_check' is True.", CUSTOM],
             'runtest': [True, "Run unit tests.", CUSTOM],  # overrides default
             'testinstall': [False, "Install into temporary directory prior to running the tests.", CUSTOM],
+            'ulimit': [None, f"Set ulimit -s to specified value. Default: Limit to {ULIMIT_DEFAULT} if unlimited.",
+                       CUSTOM],
             'unpack_sources': [None, "Unpack sources prior to build/install. Defaults to 'True' except for whl files",
                                CUSTOM],
             # A version of 0.0.0 is usually an error on installation unless the package does really not provide a
@@ -612,6 +621,39 @@ class PythonPackage(ExtensionEasyBlock):
             else:
                 raise
 
+    def set_ulimit(self):
+        """
+        Sets the ulimit stack size based on the ulimit config option.
+        Stack size is never set to any value above the hard limit specified by the system.
+        If the user has not set any stack size and the system specifies unlimited, set the
+        value to the default of ULIMIT_DEFAULT.
+        If the system specified anything else than unlimited, we only update the stack size
+        if it was set by the user.
+        """
+        # determine current stack size limit
+        res = run_shell_cmd("ulimit -s", hidden=True)
+        curr_ulimit_s = res.output.strip()
+        if not self.cfg['ulimit']:
+            if curr_ulimit_s != UNLIMITED:
+                return
+            self.cfg['ulimit'] = ULIMIT_DEFAULT
+
+        # figure out hard limit for stack size limit;
+        # this determines whether or not we can use "ulimit -s self.cfg['ulimit']"
+        res = run_shell_cmd("ulimit -s -H", hidden=True)
+        max_ulimit_s = res.output.strip()
+
+        if max_ulimit_s != UNLIMITED and int(self.cfg['ulimit']) < int(max_ulimit_s):
+            msg = "Current stack size limit is %s, and can not be set to %s due to hard limit of %s;"
+            msg += " setting stack size limit to %s instead, "
+            msg += " this may break part of the compilation..."
+            print_warning(msg % (curr_ulimit_s, self.cfg['ulimit'], max_ulimit_s, max_ulimit_s))
+            self.cfg['ulimit'] = max_ulimit_s
+
+        self.log.info(f"Current stack size limit is {curr_ulimit_s}, limiting stack size to {self.cfg['ulimit']}")
+        for opt in 'prebuildopts', 'pretestopts', 'preconfigopts':
+            self.cfg.update(opt, "ulimit -s %s && " % self.cfg['ulimit'])
+
     def determine_install_command(self):
         """
         Determine install command to use.
@@ -674,6 +716,8 @@ class PythonPackage(ExtensionEasyBlock):
         if self.python_cmd:
             # set Python lib directories
             self.set_pylibdirs()
+
+        self.set_ulimit()
 
     def _should_unpack_source(self):
         """Determine whether we need to unpack the source(s)"""
@@ -1308,7 +1352,7 @@ class PythonPackage(ExtensionEasyBlock):
             unversioned_packages = self.cfg.get('unversioned_packages', [])
             pkgs = [(self.name, self.version)]
             run_pip_list(pkgs, python_cmd=python_cmd, unversioned_packages=unversioned_packages,
-                         check_names_versions=toplevel_params['sanity_check_pip_list'])
+                         strict_check=toplevel_params['sanity_check_pip_list'])
 
         # ExtensionEasyBlock handles loading modules correctly for multi_deps, so we clean up fake_mod_data
         # and let ExtensionEasyBlock do its job

@@ -52,6 +52,7 @@ from easybuild.tools.modules import MODULE_LOAD_ENV_HEADERS, get_software_root, 
 from easybuild.tools.run import run_shell_cmd, EasyBuildExit
 from easybuild.tools.systemtools import AARCH32, AARCH64, POWER, RISCV64, X86_64, POWER_LE
 from easybuild.tools.systemtools import get_cpu_architecture, get_cpu_family, get_shared_lib_ext
+from easybuild.tools.systemtools import get_ptrace_scope
 
 from easybuild.easyblocks.generic.cmakemake import CMakeMake, get_cmake_python_config_dict
 
@@ -1486,6 +1487,12 @@ class EB_LLVM(CMakeMake):
             if 'rocr-runtime' not in self.deps:
                 self.ignore_patterns += ['amdgcn-amd-amdhsa']
                 self.log.warning("ROCr-Runtime not in dependencies, ignoring failing tests for AMDGPU target.")
+            # Ignore compiler-rt and lldb test failures if ptrace_scope is disabled, or higher than 1.
+            # In this case, debuggers and sanitizers may fail to attach to other processes.
+            if get_ptrace_scope() > 1:
+                self.ignore_patterns += ['lldb-shell', 'lldb-unit', 'libFuzzer', 'AddressSanitizer',
+                                         'HWAddressSanitizer', 'LeakSanitizer', 'SanitizerCommon', 'UBSan']
+                self.log.warning("ptrace_scope > 1 was found, ignoring failing compiler-rt sanitizer and lldb tests.")
 
             max_failed = self.cfg['test_suite_max_failed']
             if LooseVersion(get_software_version("CMake")) >= '3.19':

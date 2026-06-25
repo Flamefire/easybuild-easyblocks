@@ -651,15 +651,15 @@ class EB_PyTorch(PythonPackage):
             'excluded_tests': ' '.join(excluded_tests)
         })
 
-        parsed_test_result = super().test_step(return_output_ec=True)
-        if parsed_test_result is None:
+        test_step_result = super().test_step(return_output_ec=True)
+        if test_step_result is None:
             if self.cfg['runtest'] is False:
                 msg = "Do not set 'runtest' to False, use --skip-test-step instead."
             else:
                 msg = "Tests did not run. Make sure 'runtest' is set to a command."
             raise EasyBuildError(msg)
 
-        tests_out, tests_ec = parsed_test_result
+        tests_out, tests_ec = test_step_result
 
         failed_test_names = find_failed_test_names(tests_out)
         parsed_test_result = parse_test_log(tests_out)
@@ -709,6 +709,11 @@ class EB_PyTorch(PythonPackage):
             parsed_test_result = new_result
             failed_test_names = new_failed_names
 
+        # Calculate total number of unsuccesful tests
+        failed_test_cnt = parsed_test_result.failure_cnt + parsed_test_result.error_cnt
+        # Always log what we detected, allows for easy comparison of different builds
+        self.log.info("Detected %d failed tests (out of %d)", failed_test_cnt, parsed_test_result.test_cnt)
+
         # Show failed subtests, if any, to aid in debugging failures
         if failed_test_names.error or failed_test_names.fail:
             msg = []
@@ -723,8 +728,6 @@ class EB_PyTorch(PythonPackage):
         # Create clear summary report
         # Use a list of messages we can later join together
         failure_msgs = []
-        # Calculate total number of unsuccesful and total tests
-        failed_test_cnt = parsed_test_result.failure_cnt + parsed_test_result.error_cnt
         # Only add count message if we detected any failed tests
         if failed_test_cnt > 0:
             failure_or_failures = 'failure' if parsed_test_result.failure_cnt == 1 else 'failures'
@@ -836,6 +839,8 @@ class EB_PyTorch(PythonPackage):
             raise EasyBuildError("Test ended with failures! Exit code: %s\n%s", tests_ec, failure_report)
         elif tests_ec:
             raise EasyBuildError("Test command had non-zero exit code (%s), but no failed tests found?!", tests_ec)
+        else:
+            self.log.info("All tests passed successfully!")
 
     def test_cases_step(self):
         self._set_cache_dirs()

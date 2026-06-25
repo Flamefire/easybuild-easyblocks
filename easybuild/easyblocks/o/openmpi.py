@@ -76,6 +76,14 @@ class EB_OpenMPI(ConfigureMake):
         if LooseVersion(self.version) >= '5.0.0':
             known_dependencies.append('PRRTE')
 
+            # ROCm support added to OpenMPI after 5.0.x
+            rocmroot = get_software_root('ROCm-LLVM')
+            if rocmroot:
+                # remove plain UCC and UCX
+                known_dependencies = [d for d in known_dependencies if d not in ('UCX', 'UCC')]
+                # replace with rocm versions
+                known_dependencies.extend(['HIP', 'UCX-ROCm', 'UCC-ROCm'])
+
         # Value to use for `--with-<dep>=<value>` if the dependency is not specified in the easyconfig
         # No entry is interpreted as no option added at all
         # This is to make builds reproducible even when the system libraries are changed and avoids failures
@@ -101,9 +109,17 @@ class EB_OpenMPI(ConfigureMake):
             # libfabric option renamed in OpenMPI 3.1.0 to ofi
             if dep == 'libfabric' and LooseVersion(self.version) >= LooseVersion('3.1'):
                 opt_name = 'ofi'
-                # Check new option name. They are synonyms since 3.1.0 for backward compatibility
-                if config_opt_used(opt_name):
-                    continue
+            # needed in easybuild setup as rocm-llvm and hip live in separate dirs
+            elif dep == 'HIP':
+                opt_name = 'rocm'
+            elif dep == 'UCC-ROCm':
+                opt_name = 'ucc'
+            elif dep == 'UCX-ROCm':
+                opt_name = 'ucx'
+
+            # check again if option is already used, using new name
+            if config_opt_used(opt_name):
+                continue
 
             dep_root = get_software_root(dep)
             # If the dependency is loaded, specify its path, else use the "unused" value, if any
@@ -229,7 +245,15 @@ class EB_OpenMPI(ConfigureMake):
 
         rocmroot = get_software_root('ROCm-LLVM')
         if rocmroot:
-            custom_commands.append("ompi_info | grep -i 'rocm'")
+            custom_commands.extend([
+                "ompi_info | grep -i 'rocm'",
+                # ROCm MPI extension is built and exposed
+                "ompi_info --all | grep -E 'MPI extensions:.*rocm'",
+                # UCX PML can see the ROCm memory type
+                "ompi_info --param pml ucx --level 9 | grep -i rocm_ipc",
+                # The ROCm accelerator framework component is present
+                "ompi_info | grep -E 'MCA accelerator: rocm'",
+            ])
 
         # Add minimal test program to sanity checks
         # Run with correct MPI launcher
