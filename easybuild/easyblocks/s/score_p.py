@@ -210,7 +210,6 @@ class EB_Score_minus_P(ConfigureMake):
 
         self.cfg.update('configopts', '--without-shmem')
 
-
     def _determine_dependencies_cubelib(self):
         """
         Provides a dict for CubeLib dependencies which, in a nested dict,
