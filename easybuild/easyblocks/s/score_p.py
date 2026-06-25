@@ -42,7 +42,7 @@ from easybuild.tools import LooseVersion
 from easybuild.tools.build_log import EasyBuildError, print_warning
 from easybuild.tools.config import build_option
 from easybuild.tools.environment import unset_env_vars
-from easybuild.tools.filetools import apply_regex_substitutions
+from easybuild.tools.filetools import apply_regex_substitutions, which
 from easybuild.tools.modules import get_software_root, get_software_libdir
 from easybuild.tools.run import run_shell_cmd
 
@@ -194,24 +194,22 @@ class EB_Score_minus_P(ConfigureMake):
         """
 
         # EasyBuild does not provide an easy way to determine different SHMEM toolchains.
-        # OpenMPI is built with SHMEM support by default though. As such, enable SHMEM when OpenMPI is used
-        # as the MPI toolchain.
+        # OpenMPI is built with SHMEM support by default though. As such, enable SHMEM when OpenMPI is loaded,
+        # and oshcc is present.
         #
         # --with-shmem=(cray|openshmem|openmpi|openmpi3|sgimpt|sgimptwrapper|spectrum)
         #
-        shmem_opts = {
-            toolchain.OPENMPI: 'openmpi3',
-        }
-        mpi_fam = self.toolchain.mpi_family()
-        if mpi_fam is not None:
-            if mpi_fam in shmem_opts:
-                self.cfg.update('configopts', "--with-shmem=%s" % shmem_opts[mpi_fam])
-            else:
-                # SHMEM family not supported yet (or could not be determined), hence disable feature
-                self.log.warning("SHMEM family could not be determined, or is unsupported. Disabling SHMEM support.")
-                self.cfg.update('configopts', '--without-shmem')
-        else:
-            self.cfg.update('configopts', '--without-shmem')
+
+        ompi_root = get_software_root("OpenMPI")
+        if ompi_root:
+            oshcc_path = which("oshcc")
+            # Avoid picking up a oshcc outside of the module
+            if oshcc_path and ompi_root in oshcc_path:
+                self.cfg.update('configopts', "--with-shmem=openmpi3")
+                return
+
+        self.cfg.update('configopts', '--without-shmem')
+
 
     def _determine_dependencies_cubelib(self):
         """
