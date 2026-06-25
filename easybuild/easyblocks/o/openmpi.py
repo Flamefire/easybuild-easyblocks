@@ -79,10 +79,7 @@ class EB_OpenMPI(ConfigureMake):
             # ROCm support added to OpenMPI after 5.0.x
             rocmroot = get_software_root('ROCm-LLVM')
             if rocmroot:
-                # remove plain UCC and UCX
-                known_dependencies = [d for d in known_dependencies if d not in ('UCX', 'UCC')]
-                # replace with rocm versions
-                known_dependencies.extend(['HIP', 'UCX-ROCm', 'UCC-ROCm'])
+                known_dependencies.append('HIP')
 
         # Value to use for `--with-<dep>=<value>` if the dependency is not specified in the easyconfig
         # No entry is interpreted as no option added at all
@@ -109,13 +106,10 @@ class EB_OpenMPI(ConfigureMake):
             # libfabric option renamed in OpenMPI 3.1.0 to ofi
             if dep == 'libfabric' and LooseVersion(self.version) >= LooseVersion('3.1'):
                 opt_name = 'ofi'
+
             # needed in easybuild setup as rocm-llvm and hip live in separate dirs
-            elif dep == 'HIP':
+            if dep == 'HIP' and LooseVersion(self.version) >= LooseVersion('5.0'):
                 opt_name = 'rocm'
-            elif dep == 'UCC-ROCm':
-                opt_name = 'ucc'
-            elif dep == 'UCX-ROCm':
-                opt_name = 'ucx'
 
             # check again if option is already used, using new name
             if config_opt_used(opt_name):
