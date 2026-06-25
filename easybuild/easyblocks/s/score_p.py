@@ -57,21 +57,23 @@ class EB_Score_minus_P(ConfigureMake):
     def extra_options(extra_vars=None):
         extra_vars = ConfigureMake.extra_options(extra_vars)
         extra_vars.update({
-            'compiler_plugin': [True, "Enable building with compiler plugin", CUSTOM],
-            'detailed_tests': [False, "Enable thorough tests. May require more resources "
+            'enable_compiler_plugin': [True, "Enable building with compiler plugin", CUSTOM],
+            'enable_debug': [False, "Enables additional debug output via environment variable, at the cost of overhead",
+                             CUSTOM],
+            'enable_detailed_tests': [False, "Enable thorough tests. May require more resources "
                                       "and running tests with multiple ranks", CUSTOM],
-            'fortran': [True, "Enable building Fortran support", CUSTOM],
-            'mpi_f08': [True, "Enable building MPI Fortran 2008 bindings", CUSTOM],
-            'postinstall_tests': [False, "Enable post-installation tests", CUSTOM],
+            'enable_fortran': [True, "Enable building Fortran support", CUSTOM],
+            'enable_mpi_f08': [True, "Enable building MPI Fortran 2008 bindings", CUSTOM],
+            'enable_post_install_tests': [False, "Enable post-installation tests", CUSTOM],
         })
         return extra_vars
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        if (self.cfg["detailed_tests"] or self.cfg["postinstall_tests"]) and not self.cfg["runtest"]:
-            self.cfg["runtest"] = True
-            print_warning("Enabling 'runtest' due to requested 'detailed_tests' or 'postinstall_tests'!")
+        if (self.cfg['enable_detailed_tests'] or self.cfg['enable_post_install_tests']) and not self.cfg['runtest']:
+            self.cfg['runtest'] = True
+            print_warning("Enabling 'runtest' due to requested 'enable_detailed_tests' or 'enable_post_install_tests'!")
 
     def _patch_deficiencies(self):
         """
@@ -180,6 +182,8 @@ class EB_Score_minus_P(ConfigureMake):
             else:
                 raise EasyBuildError("MPI family %s not supported yet (only: %s)",
                                      mpi_fam, ', '.join(mpi_opts.keys()))
+        else:
+            self.cfg.update('configopts', "--without-mpi")
 
     def _determine_shmem(self):
         """
@@ -188,10 +192,26 @@ class EB_Score_minus_P(ConfigureMake):
         Providing the compilers via environment variables is not recommended, as tools provide platform files with
         additional, potentially important, flags to be used during configure.
         """
-        # EasyBuild does not provide an easy way to determine different SHMEM toolchains,
-        # and common OpenMPI recipes do not provide SHMEM in their installation. Hence,
-        # disable SHMEM explicitly to not pick up any system compilers
-        self.cfg.update('configopts', '--without-shmem')
+
+        # EasyBuild does not provide an easy way to determine different SHMEM toolchains.
+        # OpenMPI is built with SHMEM support by default though. As such, enable SHMEM when OpenMPI is used
+        # as the MPI toolchain.
+        #
+        # --with-shmem=(cray|openshmem|openmpi|openmpi3|sgimpt|sgimptwrapper|spectrum)
+        #
+        shmem_opts = {
+            toolchain.OPENMPI: 'openmpi3',
+        }
+        mpi_fam = self.toolchain.mpi_family()
+        if mpi_fam is not None:
+            if mpi_fam in shmem_opts:
+                self.cfg.update('configopts', "--with-shmem=%s" % shmem_opts[mpi_fam])
+            else:
+                # SHMEM family not supported yet (or could not be determined), hence disable feature
+                self.log.warning("SHMEM family could not be determined, or is unsupported. Disabling SHMEM support.")
+                self.cfg.update('configopts', '--without-shmem')
+        else:
+            self.cfg.update('configopts', '--without-shmem')
 
     def _determine_dependencies_cubelib(self):
         """
@@ -399,10 +419,10 @@ class EB_Score_minus_P(ConfigureMake):
         """
 
         # Enables debug output via an environment variable, for the cost of additional overhead
-        if build_option('debug'):
+        if self.cfg['enable_debug']:
             self.cfg.update('configopts', "--enable-debug")
         # More tests
-        if self.cfg["detailed_tests"]:
+        if self.cfg['enable_detailed_tests']:
             self.cfg.update('configopts', "--enable-backend-test-runs")
 
         if self.name == "Score-P":
@@ -411,18 +431,21 @@ class EB_Score_minus_P(ConfigureMake):
                 self.cfg.update('configopts', '--disable-download-externals')
 
                 # Disables Fortran instrumentation
-                fortran_switch = "enable" if self.cfg['fortran'] else "disable"
+                fortran_switch = "enable" if self.cfg['enable_fortran'] else "disable"
                 self.cfg.update('configopts', f'--{fortran_switch}-fortran')
+
                 # Disables Fortran MPI 2008 instrumentation, e.g. helpful if MPI does not provide
                 # sufficient functionality.
-                mpif08_switch = "enable" if self.cfg['mpi_f08'] else "disable"
+                # Can only be enabled when we're using a MPI toolchain
+                mpi_fam = self.toolchain.mpi_family()
+                mpif08_switch = "enable" if self.cfg['enable_mpi_f08'] and mpi_fam is not None else "disable"
                 self.cfg.update('configopts', f'--{mpif08_switch}-mpif08')
 
             # Enable / disable compiler instrumentation plugins. Should generally preferred to be
             # enabled, but could be disabled in the case of issues between the plugin and the
             # compiler version.
             comp_fam = self.toolchain.comp_family()
-            compiler_plugin_switch = "enable" if self.cfg['compiler_plugin'] else "disable"
+            compiler_plugin_switch = "enable" if self.cfg['enable_compiler_plugin'] else "disable"
             if (comp_fam == toolchain.LLVM or comp_fam == toolchain.ROCM) \
                     and LooseVersion(self.version) >= LooseVersion('9.0'):
                 self.cfg.update('configopts', f"--{compiler_plugin_switch}-llvm-plugin")
@@ -469,7 +492,7 @@ class EB_Score_minus_P(ConfigureMake):
     def post_processing_step(self, *args, **kwargs):
         super().post_processing_step(*args, **kwargs)
 
-        if self.cfg["postinstall_tests"]:
+        if self.cfg['enable_post_install_tests']:
             # Remove some settings from the environment, as they interfere with
             # Score-P's expected environment...
             unset_env_vars(['CPPFLAGS', 'LDFLAGS', 'LIBS'])
