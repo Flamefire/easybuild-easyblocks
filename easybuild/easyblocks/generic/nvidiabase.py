@@ -81,7 +81,7 @@ NVHPC_MINIMAL_EXAMPLE = """
 int main(){ return 0; }
 """
 
-# contents for MPI example compiled in the sanity check, used as a replacement
+# C sources used for MPI example compiled in the sanity check, used as a replacement
 # for the one shipped with NVHPC <26.5. While hpcx v2.20 still contains the hello_c
 # example, hpcx v2.50 dropped the test codes entirely.
 NVHPC_MPI_EXAMPLE = '''
@@ -640,9 +640,9 @@ class NvidiaBase(PackedBinary):
             custom_commands.extend([f"{comp} --version" for comp in mpi_compiler_names])
 
             # Build MPI test binary
-            # NVHPC 26.5 the default hpcx to v2.50, removing the examples from the sources.
-            # v2.20 still exists and contains the source, but might be removed in the future.
-            # Hence, we provide our own minimal code.
+            # In NVHPC 26.5, the default hpcx is v2.50, which removed all examples from the sources.
+            # v2.20 still exists and contains the sources, but might be removed in the future.
+            # Hence, we provide our own minimal code for future proofing.
             if self.version < LooseVersion('26.5'):
                 hpcx_dir = os.path.join(self.installdir, prefix, 'comm_libs', self.active_cuda_version, 'hpcx')
                 mpi_hello_src = os.path.join(hpcx_dir, 'latest', 'ompi', 'tests', 'examples', 'hello_c.c')
