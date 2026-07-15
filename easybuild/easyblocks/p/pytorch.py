@@ -493,15 +493,15 @@ class EB_PyTorch(PythonPackage):
 
         if get_software_root('CUDA'):
             options.append('USE_CUDA=1')
-            cudnn_root = get_software_root('cuDNN')
+            cudnn_root, cudnn_var = get_software_root('cuDNN', True)
             if cudnn_root:
-                options.append('CUDNN_LIB_DIR=' + os.path.join(cudnn_root, 'lib64'))
-                options.append('CUDNN_INCLUDE_DIR=' + os.path.join(cudnn_root, 'include'))
+                options.append('CUDNN_LIB_DIR=' + os.path.join(f'${cudnn_var}', 'lib64'))
+                options.append('CUDNN_INCLUDE_DIR=' + os.path.join(f'${cudnn_var}', 'include'))
 
-            nccl_root = get_software_root('NCCL')
+            nccl_root, nccl_var = get_software_root('NCCL', True)
             if nccl_root:
                 options.append('USE_SYSTEM_NCCL=1')
-                options.append('NCCL_INCLUDE_DIR=' + os.path.join(nccl_root, 'include'))
+                options.append('NCCL_INCLUDE_DIR=' + os.path.join(f'${nccl_var}', 'include'))
 
             cuda_arch_list = self.cfg.get_cuda_cc_template_value('cuda_cc_semicolon_sep')
             self.log.info('Compiling with specified list of CUDA compute capabilities: %s',
