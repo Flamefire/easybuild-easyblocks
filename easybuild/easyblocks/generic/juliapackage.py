@@ -629,10 +629,6 @@ class JuliaPackage(ExtensionEasyBlock):
         cc_check = LooseVersion(self.julia_version) >= LooseVersion('1.8')
 
         if self.is_extension:
-            exts_filter = []
-            if cc_check:
-                exts_filter.append(_COMPILECACHE_CHECK % {'ext_name': self.name, 'grep_loc': self.name})
-            exts_filter.append("julia -e 'using %(ext_name)s'")
             pkg_dir = os.path.join('packages', self.name)
 
             custom_paths = {
