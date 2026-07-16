@@ -626,13 +626,13 @@ class JuliaPackage(ExtensionEasyBlock):
             self.log.debug(f"Package {self.name} is only used for testing, skipping sanity check")
             return (True, "Test dependency, skipping sanity check")
 
-        exts_filter = ["julia -e 'using %(ext_name)s'"]
-        cc_check = False
-        if LooseVersion(self.julia_version) >= LooseVersion('1.8'):
-            cc_check = True
-            exts_filter.insert(0, _COMPILECACHE_CHECK % {'ext_name': self.name, 'grep_loc': self.name})
+        cc_check = LooseVersion(self.julia_version) >= LooseVersion('1.8')
 
         if self.is_extension:
+            exts_filter = []
+            if cc_check:
+                exts_filter.append(_COMPILECACHE_CHECK % {'ext_name': self.name, 'grep_loc': self.name})
+            exts_filter.append("julia -e 'using %(ext_name)s'")
             pkg_dir = os.path.join('packages', self.name)
 
             custom_paths = {
@@ -640,10 +640,12 @@ class JuliaPackage(ExtensionEasyBlock):
                 'dirs': [pkg_dir],
             }
 
+            exts_filter = []
+            if cc_check:
+                exts_filter.append(_COMPILECACHE_CHECK % {'ext_name': self.name, 'grep_loc': self.name})
+            exts_filter.append("julia -e 'using %(ext_name)s'")
             exts_filter = " && ".join(exts_filter)
-            exts_filter = (exts_filter, "")
-
-            self.cfg['exts_filter'] = exts_filter
+            self.cfg['exts_filter'] = (exts_filter, "")
         else:
             custom_paths = {
                 'files': [],
