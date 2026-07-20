@@ -48,7 +48,7 @@ from easybuild.tools.run import run_shell_cmd
 from easybuild.tools.utilities import trace_msg, print_msg
 from easybuild.tools.hooks import BUILD_STEP, TEST_STEP
 
-from easybuild.easyblocks.j.julia import EB_JULIA_DEPOT_PATH_VAR, EB_JULIA_LOAD_PATH_VAR
+from easybuild.easyblocks.julia import EB_JULIA_DEPOT_PATH_VAR, EB_JULIA_LOAD_PATH_VAR
 
 _COMPILECACHE_CHECK = ' | '.join([
     # "julia -E 'Base.compilecache_path(Base.identify_package(\"%(ext_name)s\"), Base.get_world_counter())'",
