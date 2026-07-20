@@ -43,7 +43,7 @@ from easybuild.framework.extensioneasyblock import ExtensionEasyBlock
 from easybuild.tools.build_log import EasyBuildError
 from easybuild.tools.config import build_option
 from easybuild.tools.modules import get_software_root, get_software_version
-from easybuild.tools.filetools import move_file
+from easybuild.tools.filetools import copy_dir
 from easybuild.tools.run import run_shell_cmd
 from easybuild.tools.utilities import trace_msg, print_msg
 from easybuild.tools.hooks import BUILD_STEP, TEST_STEP
@@ -502,7 +502,7 @@ class JuliaPackage(ExtensionEasyBlock):
         else:
             package_dir = os.path.join(self.installdir, 'packages', self.name)
 
-        move_file(self.start_dir, package_dir)
+        copy_dir(self.start_dir, package_dir)
         self.add_package(package_dir, test_only=self.cfg['is_test_dependency'])
 
     def _build_install_step(self, basedir: Union[str, None] = None):
