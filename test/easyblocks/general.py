@@ -109,7 +109,7 @@ class GeneralEasyblockTest(TestCase):
         # this is required to dance around issues with easy-install.pth files determining the actual Python search path
         # see also
         # http://blog.olgabotvinnik.com/blog/2014/03/03/2014-03-03-pythonpath-is-a-liar-site-py-and-easy-install-pth-tell/
-        import easybuild.framework
+        import easybuild.framework  # pylint: disable=import-outside-toplevel
         framework_path = up(easybuild.framework.__file__, 3)
 
         # prepend path to easybuild-easyblocks repo to $PYTHONPATH, so we're in full(?) control
@@ -122,9 +122,7 @@ class GeneralEasyblockTest(TestCase):
 
         def write_module(path, txt):
             """Write provided contents to module at given path in custom easyblocks repo."""
-            handle = open(os.path.join(custom_easyblocks_repo_path, 'easybuild', path), 'w')
-            handle.write(txt)
-            handle.close()
+            write_file(os.path.join(custom_easyblocks_repo_path, 'easybuild', path), txt)
 
         # this test should be run out of the easyblocks repository,
         # to avoid that the working directory that is prepended to the Python search path affects the test results
