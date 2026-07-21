@@ -154,6 +154,7 @@ class JuliaPackage(ExtensionEasyBlock):
         self._julia_deps = {}
         self._julia_deps_test = {}
         self._julia_version = None
+        self._pkg_deps_included = False
         self._pkg_deps = []
         self._pkgs_to_test_online = []
         self._pkgs_to_test_offline = []
@@ -444,8 +445,16 @@ class JuliaPackage(ExtensionEasyBlock):
 
         return list(deps)
 
-    def include_pkg_dependencies(self):
-        """Add to installation environment all Julia packages already present in its dependencies"""
+    def include_pkg_dependencies(self, add_subdeps: bool = True):
+        """Add to installation environment all Julia packages already present in its dependencies
+
+        :param add_subdeps: whether to also add sub-dependencies to the installation environment. Defaults to True,
+          for actual installation. Should be set to False when used for `--sanity-check-only` or similar modes that
+          skip the installation
+        """
+        if self._pkg_deps_included:
+            return
+        self._pkg_deps_included = True
         build_only_deps = self.cfg.dependencies(build_only=True)
         # add packages found in dependencies to this installation environment
         for dep in self.cfg.dependencies():
@@ -467,8 +476,9 @@ class JuliaPackage(ExtensionEasyBlock):
                     f"Incorporating Julia package in INSTALL environment {dep_name}: {dep_env}"
                 )
 
-            for pkg_path in self._deps_from_project(dep_env):
-                self.add_package(pkg_path, test_only=test_only)
+            if add_subdeps:
+                for pkg_path in self._deps_from_project(dep_env):
+                    self.add_package(pkg_path, test_only=test_only)
 
     def make_installdir(self):
         """Create new installation directory and ensure this is done only once"""
@@ -643,6 +653,8 @@ class JuliaPackage(ExtensionEasyBlock):
             exts_filter = " && ".join(exts_filter)
             self.cfg['exts_filter'] = (exts_filter, "")
         else:
+            # Ensure `pkg_deps` is populated also in `--sanity-check-only` or similar modes
+            self.include_pkg_dependencies(add_subdeps=False)
             custom_paths = {
                 'files': [],
                 'dirs': ['packages', 'environments'],
