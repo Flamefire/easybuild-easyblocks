@@ -160,6 +160,7 @@ class JuliaPackage(ExtensionEasyBlock):
         self._pkgs_to_test_offline = []
         self._tmp_test_dir = None
         self._installdir_created = False
+        self.cfg['exts_filter'] = ("julia -e 'using %(ext_name)s'", "")
 
     @property
     def julia_version(self) -> str:
@@ -637,36 +638,25 @@ class JuliaPackage(ExtensionEasyBlock):
             return (True, "Test dependency, skipping sanity check")
 
         cc_check = LooseVersion(self.julia_version) >= LooseVersion('1.8')
+        custom_commands = []
+        if cc_check:
+            custom_commands.append(_COMPILECACHE_CHECK % {'ext_name': self.name, 'grep_loc': self.name})
+        custom_paths = {
+            'files': [],
+            'dirs': [os.path.join('packages', self.name)],
+        }
 
-        if self.is_extension:
-            pkg_dir = os.path.join('packages', self.name)
-
-            custom_paths = {
-                'files': [],
-                'dirs': [pkg_dir],
-            }
-
-            exts_filter = []
+        if not self.is_extension:
+            custom_paths['dirs'].append('environments')
             if cc_check:
-                exts_filter.append(_COMPILECACHE_CHECK % {'ext_name': self.name, 'grep_loc': self.name})
-            exts_filter.append("julia -e 'using %(ext_name)s'")
-            exts_filter = " && ".join(exts_filter)
-            self.cfg['exts_filter'] = (exts_filter, "")
-        else:
-            # Ensure `pkg_deps` is populated also in `--sanity-check-only` or similar modes
-            self.include_pkg_dependencies(add_subdeps=False)
-            custom_paths = {
-                'files': [],
-                'dirs': ['packages', 'environments'],
-            }
-            custom_commands = []
-            if cc_check:
+                # Ensure `pkg_deps` is populated also in `--sanity-check-only` or similar modes
+                self.include_pkg_dependencies(add_subdeps=False)
                 for dep, _ in self.pkg_deps:
                     custom_commands.append(
                         _COMPILECACHE_CHECK % {'ext_name': dep, 'grep_loc': dep}
                     )
-            kwargs.setdefault('custom_commands', []).extend(custom_commands)
 
+        kwargs.setdefault('custom_commands', []).extend(custom_commands)
         kwargs.update({'custom_paths': custom_paths})
 
         return super().sanity_check_step(*args, **kwargs)
