@@ -77,7 +77,7 @@ PY_ENV_VARS = {
 }
 
 REGEX_PIP_NORMALIZE = re.compile(r"[-_.]+")
-REGEX_PIP_PARTIAL_NORMALIZE = re.compile(r"_+")
+REGEX_PIP_PARTIAL_NORMALIZE = re.compile(r"[-_]+")
 
 # We want the following import order:
 # 1. Packages installed into VirtualEnv
