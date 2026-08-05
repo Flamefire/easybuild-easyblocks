@@ -25,7 +25,6 @@
 """
 EasyBuild support for Bandicoot, implemented as an easyblock
 
-@author: Kenneth Hoste (Ghent University)
 @author: Tanmoy Chakraborty (University of Warwick)
 """
 import os
