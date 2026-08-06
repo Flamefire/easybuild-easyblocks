@@ -192,8 +192,9 @@ class PythonBundle(Bundle):
             # This also ensures the exts_filter option for extensions is set correctly.
             # Load module first to get the right python command.
             if not self.sanity_check_module_loaded:
-                self.sanity_check_load_module(extension=kwargs.get('extension', False),
-                                              extra_modules=kwargs.get('extra_modules', None))
+                self.sanity_check_load_module(
+                    extension=kwargs.get('extension'),  # Deprecated for 6.0, let it show warning if passed
+                    extra_modules=kwargs.get('extra_modules'))
             self.prepare_python()
 
         # inject directory path that uses %(pyshortver)s template into default value for sanity_check_paths
