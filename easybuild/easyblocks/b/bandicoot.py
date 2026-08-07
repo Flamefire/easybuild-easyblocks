@@ -48,6 +48,7 @@ class EB_Bandicoot(CMakeMake):
         self.cfg.update('configopts', "-DBOOST_INCLUDEDIR=%s" % os.path.join(boost, 'include'))
         self.cfg.update('configopts', "-DBoost_DEBUG=ON -DBOOST_ROOT=%s" % boost)
 
+        self.cfg.update('configopts', '-DBLAS_LIBRARY="%s"' % os.getenv('LIBBLAS'))
         self.cfg.update('configopts', '-DLAPACK_LIBRARY="%s"' % os.getenv('LIBLAPACK'))
         self.cfg.update('configopts', '-DFIND_OPENCL=OFF')
 
