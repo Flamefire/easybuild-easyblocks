@@ -486,11 +486,20 @@ class PythonPackage(ExtensionEasyBlock):
         if extra_vars is None:
             extra_vars = {}
         extra_vars.update({
-            'buildcmd': [None, "Command for building the package (e.g. for custom builds resulting in a whl file). "
-                               "When using setup.py it will be auto-generated using the value of 'build_target'. "
-                               "Otherwise it will be used as-is. A value of None then skips the build step. "
+            'buildcmd': [None, "DEPRECATED: Use build_cmd or build_target instead."
+                               "Command for building the package (e.g. for custom builds resulting in a whl file). "
+                               "When using setup.py: This will be passed to setup.py, if set, "
+                               "else build_target is used. "
+                               "Without setup.y: It will be used as-is. A value of None then skips the build step. "
                                "The template %(python)s will be replaced by the currently used Python binary.", CUSTOM],
-            'build_target': ['build', "Option to pass to setup.py for building", CUSTOM],
+            'build_cmd': [None,
+                          "Command for building the package (e.g. for custom builds resulting in a whl file). "
+                          "When using setup.py the default will be auto-generated using the value of 'build_target'. "
+                          "Otherwise (use_pip=True), it will be used as-is and a value of None skips the build step. "
+                          "The template %(python)s will be replaced by the currently used Python binary.",
+                          CUSTOM],
+            # TODO EasyBuild 6.0: Set default to 'build' here when 'buildcmd' is removed.
+            'build_target': [None, "Option to pass to setup.py for building when use_pip=False.", CUSTOM],
             'check_ldshared': [None, 'Check Python value of $LDSHARED, correct if needed to "$CC -shared"', CUSTOM],
             'click_autocomplete_bins': [None, "List of command line tools installed by the package that use "
                                               "the 'click' package and for which autocompletion scripts "
@@ -1023,24 +1032,21 @@ class PythonPackage(ExtensionEasyBlock):
             self.log.info(f"Skipping build step for installation of dummy package {self.name}-{self.version}")
             return
 
-        # inject extra '%(python)s' template value before getting value of 'buildcmd' custom easyconfig parameter
+        # inject extra '%(python)s' template value before getting value of custom easyconfig parameters
         self.cfg.template_values['python'] = self.python_cmd
-        build_cmd = self.cfg['buildcmd']
+        buildcmd = self.cfg['buildcmd']
+        build_cmd = self.cfg['build_cmd']
+        build_target = self.cfg['build_target']
+        if buildcmd:
+            self.log.deprecated("Use 'build_target' and 'buildopts' instead of 'buildcmd' to pass arguments to "
+                                "setup.py. Use 'build_cmd' to run a command before the build.", '6.0')
+            if build_target is not None or build_cmd is not None:
+                raise EasyBuildError("Cannot specify both 'buildcmd' and 'build_target'/'build_cmd' in easyconfig")
 
-        if self.use_setup_py:
-            # For setup.py-based builds the `buildcmd` was used as the argument to setup.py
-            # and may even contain options such as: buildcmd = 'build --customize=eb_customize.py'
-            # But it should be a command to execute, so prepend 'python setup.py' only when it is surely not.
-            if not build_cmd:
-                build_cmd = f"{self.python_cmd} setup.py {self.cfg['build_target']}"
-            elif any(build_cmd.startswith(cmd) for cmd in ('build ', 'build_ext ')) or re.match(r'\w+', build_cmd):
-                if ' ' not in build_cmd:
-                    self.log.deprecated("Use 'build_target' instead of 'buildcmd' "
-                                        "to pass the build target to setup.py", '5.1')
-                else:
-                    self.log.deprecated("Use 'build_target' and 'buildopts' instead of 'buildcmd' "
-                                        "to pass arguments to setup.py", '5.1')
-                build_cmd = f"{self.python_cmd} setup.py {build_cmd}"
+        if self.use_setup_py and build_cmd is None:
+            if build_target is None:
+                build_target = 'build' if buildcmd is None else buildcmd
+            build_cmd = f"{self.python_cmd} setup.py {build_target}"
 
         if build_cmd:
             cmd = ' '.join([self.cfg['prebuildopts'], build_cmd, self.cfg['buildopts']])
