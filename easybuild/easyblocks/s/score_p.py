@@ -69,6 +69,7 @@ class EB_Score_minus_P(ConfigureMake):
         return extra_vars
 
     def __init__(self, *args, **kwargs):
+        """Constructor for Score-P easyblock."""
         super().__init__(*args, **kwargs)
 
         if (self.cfg['enable_detailed_tests'] or self.cfg['enable_post_install_tests']) and not self.cfg['runtest']:
