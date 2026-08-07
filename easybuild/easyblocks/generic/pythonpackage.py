@@ -1048,7 +1048,9 @@ class PythonPackage(ExtensionEasyBlock):
                 build_target = 'build' if buildcmd is None else buildcmd
             build_cmd = f"{self.python_cmd} setup.py {build_target}"
 
-        if build_cmd:
+        if not build_cmd:
+            self.log.info(f"Skipping build step for {self.name}-{self.version}: No build_cmd specified.")
+        else:
             cmd = ' '.join([self.cfg['prebuildopts'], build_cmd, self.cfg['buildopts']])
             res = run_shell_cmd(cmd)
 
