@@ -48,7 +48,9 @@ class Dataset(Binary):
         extra_vars.update({
             'extract_sources': [True, "Whether or not to extract data sources", CUSTOM],
             'data_install_path': [None, "Custom installation path for datasets", CUSTOM],
-            'cleanup_data_sources': [False, "Whether or not to delete the data sources after installation", CUSTOM]
+            'cleanup_data_sources': [False, "Whether or not to delete the data sources after installation", CUSTOM],
+            'object_storage_ignore_dirs': [[], "List of directories (relative to installdir) to be excluded from "
+                                               "object storage (use '.' for full installdir)", CUSTOM],
         })
         return extra_vars
 
@@ -59,6 +61,12 @@ class Dataset(Binary):
         if self.cfg['sources']:
             raise EasyBuildError(
                 "Easyconfig parameter 'sources' is not supported for this EasyBlock. Use 'data_sources' instead.")
+
+        with self.cfg.disable_templating():
+            ignore_dirs = self.cfg['object_storage_ignore_dirs']
+        if not isinstance(ignore_dirs, (list, tuple)):
+            raise EasyBuildError(f"Incorrect value type '{type(ignore_dirs).__name__}' for "
+                                 "object_storage_ignore_dirs, should be list or tuple.")
 
         if self.cfg['data_install_path']:
             self.installdir = self.cfg['data_install_path']
@@ -81,7 +89,11 @@ class Dataset(Binary):
         change_dir(self.installdir)
         object_storage = os.path.normpath(os.path.join(os.getcwd(), os.pardir, 'object_storage'))
 
-        datafiles = create_index(os.curdir)
+        ignore_dirs = self.cfg['object_storage_ignore_dirs']
+        if ignore_dirs and '.' in ignore_dirs:
+            datafiles = []
+        else:
+            datafiles = create_index(os.curdir, ignore_dirs=ignore_dirs)
 
         for datafile in datafiles:
             cks = compute_checksum(datafile, checksum_type='sha256')
