@@ -599,6 +599,8 @@ class EB_LLVM(CMakeMake):
     def _configure_target_runtimes(self):
         """
         Configure target runtime options for LLVM, required for LLVM 22+.
+        Related to changes in https://github.com/llvm/llvm-project/pull/136729 where te build of openmp device runtimes
+        has been moved to `openmp/device` from `offload`
         Should only be called from _configure_final_build.
         """
         if LooseVersion(self.version) < '22':
