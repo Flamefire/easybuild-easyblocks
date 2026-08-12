@@ -103,12 +103,12 @@ class EB_binutils(ConfigureMake):
 
         version = LooseVersion(self.version)
 
+        # determine list of 'lib' directories to use rpath for;
+        # this should 'harden' the resulting binutils to bootstrap GCC
+        # (no trouble when other libstdc++ is build etc)
+        lib_paths = self.determine_used_library_paths()
+        self.search_paths = lib_paths.copy()
         if self.toolchain.is_system_toolchain():
-            # determine list of 'lib' directories to use rpath for;
-            # this should 'harden' the resulting binutils to bootstrap GCC
-            # (no trouble when other libstdc++ is build etc)
-            lib_paths = self.determine_used_library_paths()
-
             # The installed lib dir must come first though to avoid taking system libs over installed ones, see:
             # https://github.com/easybuilders/easybuild-easyconfigs/issues/10056
             # To get literal $ORIGIN through Make we need to escape it by doubling $$, else it's a variable to Make;
@@ -229,6 +229,10 @@ class EB_binutils(ConfigureMake):
                 if gcc_version and ('4.8.1' <= gcc_version < '6.1.0'):
                     # append "-std=c++11" to $CXXFLAGS, not overriding
                     self.cfg.update('buildopts', 'CXXFLAGS="$CXXFLAGS -std=c++11"')
+
+    def build_step(self, verbose=None, path=None):
+        env.setvar('LIB_PATH', ':'.join(self.search_paths))
+        return super().build_step(verbose, path)
 
     def install_step(self):
         """Install using 'make install', also symlink libiberty/demangle headers if desired."""
