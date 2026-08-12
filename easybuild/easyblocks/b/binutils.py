@@ -61,6 +61,8 @@ class EB_binutils(ConfigureMake):
         """Easyblock constructor"""
         super().__init__(*args, **kwargs)
 
+        self.search_paths = []
+
         if LooseVersion(self.version) >= LooseVersion('2.44') or get_cpu_family() == RISCV:
             # ld.gold linker is not supported on RISC-V, and is being phased out starting from v2.44
             self.use_gold = False
@@ -297,6 +299,9 @@ class EB_binutils(ConfigureMake):
 
         # All binaries support --version, check that they can be run
         custom_commands = ['%s --version' % b for b in binaries]
+
+        for sdir in self.search_paths:
+            custom_commands.append(f'ld -verbose | grep "SEARCH_DIR(" | grep "{sdir}"')
 
         # if zlib is listed as a build dependency, it should have been linked in statically
         build_deps = self.cfg.dependencies(build_only=True)
