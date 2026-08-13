@@ -1072,6 +1072,18 @@ def determine_suite_name(xml_file: Path, test_suite_xml: List[ET.Element]) -> Op
     return suite_name
 
 
+def handle_xfail_results(test_suite_el: ET.Element) -> None:
+    """Transform elements such that xfails are counted as success"""
+    numXFail = 0
+    for testcase in test_suite_el.iterfind("testcase"):
+        skipped = testcase.find('skipped')
+        if skipped is not None and skipped.get('type') == 'pytest.xfail':
+            numXFail += 1
+            testcase.remove(skipped)
+    if numXFail:
+        test_suite_el.attrib["skipped"] = int(test_suite_el.attrib["skipped"]) - numXFail
+
+
 def parse_test_result_file(xml_file: Path) -> List[TestSuite]:
     """
     Parses the given XML file into TestSuite and TestCase objects.
@@ -1103,6 +1115,7 @@ def parse_test_result_file(xml_file: Path) -> List[TestSuite]:
         test_suites: List[TestSuite] = []
 
         for test_suite in test_suite_xml:
+            handle_xfail_results(test_suite)
             # Those are based on the number of the corresponding elements in all <testcase>-elements.
             # This means e.g. that a test with multiple <skipped> will be counted as multiple skipped tests.
             errors = int(test_suite.attrib["errors"])
