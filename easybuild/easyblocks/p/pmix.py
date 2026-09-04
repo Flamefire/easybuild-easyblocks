@@ -83,8 +83,8 @@ class EB_PMIx(ConfigureMake):
         if '5.0.0' <= version < '5.0.5':
             known_dependencies.append('alps')
 
-        if version < '4.2.6' or '5' <= version < '5.0.10':
-            # Different option name until 5.0.10
+        if version < '4.2.6' or '5' <= version < '5.0.1':
+            # Different option name
             known_dependencies.append(('plibltdl', 'libltdl'))
         else:
             known_dependencies.append('libltdl')
